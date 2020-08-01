@@ -210,7 +210,6 @@ struct Data_Buffer {
     }
 
     Chunk *new_chunk(u64 size = 4096) {
-        printf("new chinkn\n");
         if (size < 4096) size = 4096;
         Chunk c;
         c.data     = (u8 *)malloc(size);
@@ -430,7 +429,6 @@ void emit_load_of_value(Linker_Object *object, Section *code_section, Section *d
             reloc.is_rip_relative = true;
             reloc.offset = code_section->data.size();
             reloc.symbol_index = data_section->symbol_index;
-            printf("symbo: %d\n", reloc.symbol_index);
             reloc.size = 4;
 
             code_section->relocations.add(reloc);
@@ -719,16 +717,6 @@ void emit_obj_file(Compilation_Unit *unit) {
 
 
 int main(int argc, char **argv) {
-
-    Array<int> test;
-    test.add(1);
-    test.add(2);
-    test.add(3);
-
-    for (auto it : test) {
-        printf("test %d\n", it);
-    }
-
     Compilation_Unit unit;
     Function *printf_func = new Function();
     printf_func->name = "printf";
