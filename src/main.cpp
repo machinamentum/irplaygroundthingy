@@ -336,18 +336,27 @@ struct Constant : Value {
     Constant() { type = VALUE_CONSTANT; }
 
     enum {
-        STRING
+        STRING,
+        INTEGER
     };
 
     u32 constant_type;
 
     String string_value;
+    u64 integer_value;
 };
 
 Constant *make_string_constant(String value) {
     Constant *con = new Constant();
     con->constant_type = Constant::STRING;
     con->string_value = value;
+    return con;
+}
+
+Constant *make_integer_constant(u64 value) {
+    Constant *con = new Constant();
+    con->constant_type = Constant::INTEGER;
+    con->integer_value = value;
     return con;
 }
 
@@ -399,12 +408,68 @@ u32 get_symbol_index(Linker_Object *object, Global_Value *value) {
 }
 
 const u8 RAX = 0;
+const u8 RCX = 1;
+const u8 RDX = 2;
+const u8 RBX = 3;
+const u8 RSP = 4;
 const u8 RBP = 5;
+const u8 RSI = 6;
 const u8 RDI = 7;
+const u8 R8  = 8;
+const u8 R9  = 9;
 
-#define REX(W, R, X, B) (0b01000000 | (W << 3) | (R << 2) | (X << 1) | B)
+u8 get_next_system_v_abi_register(u8 *index) {
+    u8 value = *index;
 
-#define ModRM(mod, reg, rm) ((mod << 6) | (reg << 3) | rm)
+    (*index) += 1;
+
+    switch (value) {
+        case 0: return RDI;
+        case 1: return RSI;
+        case 2: return RDX;
+        case 3: return RCX;
+        case 4: return R8;
+        case 5: return R9;
+        default: return 0xFF;
+    }
+}
+
+// This magic is best explained on OSDev https://wiki.osdev.org/X86-64_Instruction_Encoding
+// REX prefixes the instruction, ModRM seems to post-fix the instruction but before data operands,
+// and both seem to be optional... and the processor magically understands these things and parsers
+// instructions correctly ????
+#define REX(W, R, X, B) (0b01000000 | ((W) << 3) | ((R) << 2) | ((X) << 1) | (B))
+#define ModRM(mod, reg, rm) (((mod) << 6) | ((reg) << 3) | (rm))
+
+void Mov_Reg_to_Reg_64(Data_Buffer *dataptr, u8 src, u8 dst) {
+    dataptr->append_byte(REX(1, (dst & 0b1000) >> 3, 0, (src & 0b1000) >> 3));
+    dataptr->append_byte(0x8B);
+    dataptr->append_byte(ModRM(0b11, dst & 0b0111, src & 0b0111));
+}
+
+void Mov_Imm64_to_Reg_64(Data_Buffer *dataptr, u64 imm, u8 reg) {
+    dataptr->append_byte(REX(1, 0, 0, 0));
+    dataptr->append_byte(0xB8 + reg);
+    u64 *value = (u64 *)dataptr->allocate(8);
+    *value = imm;
+}
+
+// Need to allocate 4 bytes of space after this call
+void Lea_RIP_RAX_64(Data_Buffer *dataptr) {
+    dataptr->append_byte(REX(1, 0, 0, 0));
+    dataptr->append_byte(0x8D);
+    dataptr->append_byte(ModRM(0b00, 0, 0b101));
+}
+
+void Pop_Reg_64(Data_Buffer *dataptr, u8 reg) {
+    dataptr->append_byte(REX(1, 0, 0, (reg & 0b1000) >> 3));
+    dataptr->append_byte(0x58 + (reg & 0b0111));
+}
+
+void Push_Reg_64(Data_Buffer *dataptr, u8 reg) {
+    dataptr->append_byte(REX(1, 0, 0, (reg & 0b1000) >> 3));
+    dataptr->append_byte(0x50 + (reg & 0b0111));
+}
 
 void emit_load_of_value(Linker_Object *object, Section *code_section, Section *data_section, Value *value, int _register) {
     if (value->type == VALUE_CONSTANT) {
@@ -413,16 +478,14 @@ void emit_load_of_value(Linker_Object *object, Section *code_section, Section *d
         if (constant->constant_type == Constant::STRING) {
             auto data_sec_offset = data_section->data.size();
 
-            // copy the string into the data section
+            // copy the string characters into the data section
             void *data_target = data_section->data.allocate(constant->string_value.length);
             memcpy(data_target, constant->string_value.data, constant->string_value.length);
             data_section->data.append_byte(0);
 
 
             // lea data-section-location(%rip), %reg
-            code_section->data.append_byte(REX(1, 0, 0, 0));
-            code_section->data.append_byte(0x8D + RAX);
-            code_section->data.append_byte(ModRM(0b00, 0, 0b101));
+            Lea_RIP_RAX_64(&code_section->data);
 
             Relocation reloc;
             reloc.is_for_rip_call = false;
@@ -436,11 +499,14 @@ void emit_load_of_value(Linker_Object *object, Section *code_section, Section *d
             u64 *value = (u64 *)code_section->data.allocate(4);
             *value = data_sec_offset;
 
-            code_section->data.append_byte(REX(1, 0, 0, 0));
-            code_section->data.append_byte(0x8B);
-            code_section->data.append_byte(ModRM(0b11, _register, RAX));
+            if (_register != RAX) {
+                // Move result from RAX to target register
+                Mov_Reg_to_Reg_64(&code_section->data, RAX, _register);
+            }
 
-        } else assert(false);
+        } else if (constant->constant_type == Constant::INTEGER) {
+            Mov_Imm64_to_Reg_64(&code_section->data, constant->integer_value, _register);
+        }
     }
 }
 
@@ -449,8 +515,15 @@ void emit_instruction(Linker_Object *object, Section *code_section, Section *dat
         case INSTRUCTION_CALL: {
             auto call = static_cast<Instruction_Call *>(inst);
 
-            emit_load_of_value(object, code_section, data_section, call->parameters[0], RDI);
+            u8 index = 0;
+            for (auto p : call->parameters) {
+                emit_load_of_value(object, code_section, data_section, p, RAX);
 
+                u8 param_reg = get_next_system_v_abi_register(&index);
+                Mov_Reg_to_Reg_64(&code_section->data, RAX, param_reg);
+            }
+
+            // load number of floating point parameters into %al
             code_section->data.append_byte(REX(1, 0, 0, 0));
             code_section->data.append_byte(0xB8 + RAX);
             u64 *value = (u64 *)code_section->data.allocate(8);
@@ -458,7 +531,7 @@ void emit_instruction(Linker_Object *object, Section *code_section, Section *dat
 
 
             code_section->data.append_byte(REX(1, 0, 0, 0));
-            code_section->data.append_byte(0xE8);
+            code_section->data.append_byte(0xE8); // callq
             // code_section->data.append_byte(ModRM(0b00, 0b000, 0b101));
 
             Relocation reloc;
@@ -477,8 +550,7 @@ void emit_instruction(Linker_Object *object, Section *code_section, Section *dat
         }
 
         case INSTRUCTION_RETURN: {
-            code_section->data.append_byte(REX(1, 0, 0, 1));
-            code_section->data.append_byte(0x58 + RBP); // popq rbp
+            Pop_Reg_64(&code_section->data, RBP);
 
             code_section->data.append_byte(0xC3);
             break;
@@ -496,8 +568,7 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
     if (!sym->is_externally_defined) sym->section_number = code_section->section_number;
     sym->section_offset = code_section->data.size();
 
-    code_section->data.append_byte(REX(1, 0, 0, 0));
-    code_section->data.append_byte(0x50+RBP); // pushq rbp
+    Push_Reg_64(&code_section->data, RBP);
 
     for (auto block : function->blocks) {
         for (auto inst : block->instructions) {
@@ -729,7 +800,8 @@ int main(int argc, char **argv) {
 
     Instruction_Call *call = new Instruction_Call();
     call->call_target = printf_func;
-    call->parameters.add(make_string_constant("Hello World\n"));
+    call->parameters.add(make_string_constant("Hello World: %d\n"));
+    call->parameters.add(make_integer_constant(234));
 
     block->instructions.add(call);
     block->instructions.add(new Instruction_Return());
