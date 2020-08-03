@@ -2,6 +2,8 @@
 #include <assert.h>
 #include <stdio.h>
 
+#include <new>
+
 typedef uint64_t u64;
 typedef uint32_t u32;
 typedef uint16_t u16;
@@ -150,8 +152,13 @@ struct Array {
     }
 
     void resize(u64 amount) {
+        auto old_amount = count;
         reserve(amount);
         count = amount;
+
+        for (; old_amount < count; ++old_amount) {
+            new (data + old_amount) T();
+        }
     }
 
     void add(T element) {
@@ -306,8 +313,15 @@ struct Linker_Object {
 
 enum {
     VALUE_CONSTANT,
-    INSTRUCTION_CALL,
+
+    INSTRUCTION_FIRST,
+    
+    INSTRUCTION_CALL = INSTRUCTION_FIRST,
     INSTRUCTION_RETURN,
+    INSTRUCTION_ALLOCA,
+    INSTRUCTION_STORE,
+
+    INSTRUCTION_LAST,
 };
 
 struct Type {
@@ -326,6 +340,23 @@ struct Type {
         Type *pointer_to;
     };
 };
+
+Type *make_integer_type(u32 size) {
+    Type *type      = new Type();
+    type->type      = Type::INTEGER;
+    type->size      = size;
+    type->alignment = type->size;
+    return type;
+}
+
+Type *make_pointer_type(Type *pointee) {
+    Type *type = new Type();
+    type->type = Type::POINTER;
+    type->size = 8; // @TargetInfo
+    type->alignment = type->size;
+    type->pointer_to = pointee;
+    return type;
+}
 
 struct Value {
     u32 type;
@@ -350,6 +381,7 @@ Constant *make_string_constant(String value) {
     Constant *con = new Constant();
     con->constant_type = Constant::STRING;
     con->string_value = value;
+    con->value_type = make_pointer_type(make_integer_type(1));
     return con;
 }
 
@@ -357,12 +389,22 @@ Constant *make_integer_constant(u64 value) {
     Constant *con = new Constant();
     con->constant_type = Constant::INTEGER;
     con->integer_value = value;
+    con->value_type = make_integer_type(8);
     return con;
 }
 
 struct Function;
+struct Instruction;
+
+struct Register {
+    u8 machine_reg;
+    bool is_free = true;
+    Instruction *currently_holding_result_of_instruction = nullptr;
+};
 
 struct Instruction : Value {
+    Register *result_stored_in    = nullptr;
+    u32 result_spilled_onto_stack = 0xFFFFFFFF;
 };
 
 struct Instruction_Call : Instruction {
@@ -378,6 +420,35 @@ struct Instruction_Return : Instruction {
     Value *return_value;
 };
 
+struct Instruction_Alloca : Instruction {
+    Instruction_Alloca() { type = INSTRUCTION_ALLOCA; }
+
+    Type *alloca_type = nullptr;
+
+    u64 stack_offset = 0;
+};
+
+struct Instruction_Store : Instruction {
+    Instruction_Store() { type = INSTRUCTION_STORE; }
+
+    Value *store_target = nullptr;
+    Value *source_value = nullptr;
+};
+
+Instruction_Store *make_store(Value *source_value, Value *store_target) {
+    Instruction_Store *store = new Instruction_Store();
+    store->source_value = source_value;
+    store->store_target = store_target;
+    return store;
+}
+
+Instruction_Alloca *make_alloca(Type *alloca_type) {
+    Instruction_Alloca *_alloca = new Instruction_Alloca();
+    _alloca->alloca_type = alloca_type;
+    _alloca->value_type = make_pointer_type(alloca_type);
+    return _alloca;
+}
+
 struct Basic_Block {
     Array<Instruction *> instructions;
 };
@@ -387,9 +458,72 @@ struct Global_Value : Constant {
     u64 symbol_index = 0;
 };
 
+const u8 RAX = 0;
+const u8 RCX = 1;
+const u8 RDX = 2;
+const u8 RBX = 3;
+const u8 RSP = 4;
+const u8 RBP = 5;
+const u8 RSI = 6;
+const u8 RDI = 7;
+const u8 R8  = 8;
+const u8 R9  = 9;
+
+void move_reg64_to_memory(Data_Buffer *dataptr, u8 src, u8 dst, u32 disp);
+
 struct Function : Global_Value {
     Array<Type *> parameter_types;
     Array<Basic_Block *> blocks;
+
+    // For code gen
+    Array<Register> register_usage;
+
+    Register *get_free_register() {
+        for (auto &reg : register_usage) {
+            if (reg.is_free) {
+                reg.is_free = false;
+                return &reg;
+            }
+        }
+
+        return nullptr;
+    }
+
+    Register *claim_register(Data_Buffer *dataptr, u8 machine_reg, Instruction *claimer) {
+        Register *reg = &register_usage[machine_reg];
+        maybe_spill_register(dataptr, reg);
+
+        if (claimer) {
+            reg->currently_holding_result_of_instruction = claimer;
+            claimer->result_stored_in = reg;
+            claimer->result_spilled_onto_stack = 0;
+        }
+
+        reg->is_free = false;
+        return reg;
+    }
+
+    void free_register(Register *reg) {
+        reg->currently_holding_result_of_instruction = nullptr;
+        reg->is_free = true;
+    }
+
+    void maybe_spill_register(Data_Buffer *dataptr, Register *reg) {
+        if (reg->currently_holding_result_of_instruction) {
+            auto inst = reg->currently_holding_result_of_instruction;
+            inst->result_stored_in = nullptr;
+            inst->result_spilled_onto_stack = this->stack_size;
+            this->stack_size += 8; // @TargetInfo
+            reg->currently_holding_result_of_instruction = nullptr;
+
+            move_reg64_to_memory(dataptr, reg->machine_reg, RBP, inst->result_spilled_onto_stack);
+        }
+
+        reg->is_free = true;
+    }
+
+    Array<u32 *>    stack_size_fixups;
+    u32 stack_size = 0;
 };
 
 struct Compilation_Unit {
@@ -406,17 +540,6 @@ u32 get_symbol_index(Linker_Object *object, Global_Value *value) {
 
     return value->symbol_index;
 }
-
-const u8 RAX = 0;
-const u8 RCX = 1;
-const u8 RDX = 2;
-const u8 RBX = 3;
-const u8 RSP = 4;
-const u8 RBP = 5;
-const u8 RSI = 6;
-const u8 RDI = 7;
-const u8 R8  = 8;
-const u8 R9  = 9;
 
 u8 get_next_system_v_abi_register(u8 *index) {
     u8 value = *index;
@@ -441,13 +564,21 @@ u8 get_next_system_v_abi_register(u8 *index) {
 #define REX(W, R, X, B) (0b01000000 | ((W) << 3) | ((R) << 2) | ((X) << 1) | (B))
 #define ModRM(mod, reg, rm) (((mod) << 6) | ((reg) << 3) | (rm))
 
-void Mov_Reg_to_Reg_64(Data_Buffer *dataptr, u8 src, u8 dst) {
+void move_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst) {
     dataptr->append_byte(REX(1, (dst & 0b1000) >> 3, 0, (src & 0b1000) >> 3));
     dataptr->append_byte(0x8B);
     dataptr->append_byte(ModRM(0b11, dst & 0b0111, src & 0b0111));
 }
 
-void Mov_Imm64_to_Reg_64(Data_Buffer *dataptr, u64 imm, u8 reg) {
+void move_reg64_to_memory(Data_Buffer *dataptr, u8 src, u8 dst, u32 disp) {
+    dataptr->append_byte(REX(1, (src & 0b1000) >> 3, 0, (dst & 0b1000) >> 3));
+    dataptr->append_byte(0x89);
+    dataptr->append_byte(ModRM(0b10, src & 0b0111, dst & 0b0111));
+    u32 *value = (u32  *)dataptr->allocate(4);
+    *value = disp;
+}
+
+void move_imm64_to_reg64(Data_Buffer *dataptr, u64 imm, u8 reg) {
     dataptr->append_byte(REX(1, 0, 0, 0));
     dataptr->append_byte(0xB8 + reg);
     u64 *value = (u64 *)dataptr->allocate(8);
@@ -455,25 +586,79 @@ void Mov_Imm64_to_Reg_64(Data_Buffer *dataptr, u64 imm, u8 reg) {
 }
 
 // Need to allocate 4 bytes of space after this call
-void Lea_RIP_RAX_64(Data_Buffer *dataptr) {
-    dataptr->append_byte(REX(1, 0, 0, 0));
+void lea_rip_relative_into_reg64(Data_Buffer *dataptr, u8 reg) {
+    dataptr->append_byte(REX(1, (reg & 0b1000) >> 3, 0, 0));
     dataptr->append_byte(0x8D);
-    dataptr->append_byte(ModRM(0b00, 0, 0b101));
+    dataptr->append_byte(ModRM(0b00, (reg & 0b0111), 0b101));
 }
 
-void Pop_Reg_64(Data_Buffer *dataptr, u8 reg) {
+void lea_into_reg64(Data_Buffer *dataptr, u8 dst, u8 src, u32 disp) {
+    dataptr->append_byte(REX(1, (dst & 0b1000) >> 3, 0, (src & 0b1000) >> 3));
+    dataptr->append_byte(0x8D);
+    dataptr->append_byte(ModRM(0b10, (dst & 0b0111), src & 0b0111));
+    u32 *value = (u32  *)dataptr->allocate(4);
+    *value = disp;
+}
+
+void pop_reg64(Data_Buffer *dataptr, u8 reg) {
     dataptr->append_byte(REX(1, 0, 0, (reg & 0b1000) >> 3));
     dataptr->append_byte(0x58 + (reg & 0b0111));
 }
 
-void Push_Reg_64(Data_Buffer *dataptr, u8 reg) {
+void push_reg64(Data_Buffer *dataptr, u8 reg) {
     dataptr->append_byte(REX(1, 0, 0, (reg & 0b1000) >> 3));
     dataptr->append_byte(0x50 + (reg & 0b0111));
 }
 
-void emit_load_of_value(Linker_Object *object, Section *code_section, Section *data_section, Value *value, int _register) {
+u32 *sub_imm32_from_reg64(Data_Buffer *dataptr, u8 reg, u32 value) {
+    dataptr->append_byte(REX(1, 0, 0, 0));
+    dataptr->append_byte(0x81);
+    dataptr->append_byte(ModRM(0b11, 5,  reg & 0b0111));
+    u32 *operand = (u32 *)dataptr->allocate(4);
+    *operand = value;
+
+    return operand;
+}
+
+u32 *add_imm32_to_reg64(Data_Buffer *dataptr, u8 reg, u32 value) {
+    dataptr->append_byte(REX(1, 0, 0, 0));
+    dataptr->append_byte(0x81);
+    dataptr->append_byte(ModRM(0b11, 0,  reg & 0b0111));
+    u32 *operand = (u32 *)dataptr->allocate(4);
+    *operand = value;
+
+    return operand;
+}
+
+u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction *inst) {
+    if (auto reg = inst->result_stored_in) {
+        return reg->machine_reg;
+    } else {
+        reg = function->get_free_register();
+        if (!reg) {
+            reg = &function->register_usage[RAX];
+            function->maybe_spill_register(dataptr, reg);
+            reg->is_free = false;
+        }
+
+        function->claim_register(dataptr, reg->machine_reg, inst);
+
+        lea_into_reg64(dataptr, reg->machine_reg, RBP, inst->result_spilled_onto_stack);
+        return reg->machine_reg;
+    }
+}
+
+
+u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_section, Section *data_section, Value *value) {
     if (value->type == VALUE_CONSTANT) {
         auto constant = static_cast<Constant *>(value);
+
+        Register *reg = function->get_free_register();
+        if (!reg) {
+            reg = &function->register_usage[RAX];
+            function->maybe_spill_register(&code_section->data, reg);
+            reg->is_free = false;
+        }
 
         if (constant->constant_type == Constant::STRING) {
             auto data_sec_offset = data_section->data.size();
@@ -485,7 +670,7 @@ void emit_load_of_value(Linker_Object *object, Section *code_section, Section *d
 
 
             // lea data-section-location(%rip), %reg
-            Lea_RIP_RAX_64(&code_section->data);
+            lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
 
             Relocation reloc;
             reloc.is_for_rip_call = false;
@@ -499,28 +684,59 @@ void emit_load_of_value(Linker_Object *object, Section *code_section, Section *d
             u64 *value = (u64 *)code_section->data.allocate(4);
             *value = data_sec_offset;
 
-            if (_register != RAX) {
-                // Move result from RAX to target register
-                Mov_Reg_to_Reg_64(&code_section->data, RAX, _register);
-            }
-
+            // if (_register != RAX) move_reg64_to_reg64(&code_section->data, RAX, _register);
         } else if (constant->constant_type == Constant::INTEGER) {
-            Mov_Imm64_to_Reg_64(&code_section->data, constant->integer_value, _register);
+            move_imm64_to_reg64(&code_section->data, constant->integer_value, reg->machine_reg);
         }
+
+        return reg->machine_reg;
+    } else if (value->type == INSTRUCTION_ALLOCA) {
+        auto _alloca = static_cast<Instruction_Alloca *>(value);
+
+        Register *reg = function->get_free_register();
+        if (!reg) {
+            reg = &function->register_usage[RAX];
+            function->maybe_spill_register(&code_section->data, reg);
+            reg->is_free = false;
+        }
+
+        function->claim_register(&code_section->data, reg->machine_reg, _alloca);
+
+        lea_into_reg64(&code_section->data, reg->machine_reg, RBP, _alloca->stack_offset);
+        return reg->machine_reg;
+    } else if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) {
+        auto inst = static_cast<Instruction *>(value);
+        return load_instruction_result(function, &code_section->data, inst);
     }
+
+    assert(false);
+    return 0;
 }
 
-void emit_instruction(Linker_Object *object, Section *code_section, Section *data_section, Instruction *inst) {
+u8 emit_instruction(Linker_Object *object, Function *function, Section *code_section, Section *data_section, Instruction *inst) {
     switch (inst->type) {
+        case INSTRUCTION_ALLOCA: {
+            break;
+        }
+
+        case INSTRUCTION_STORE: {
+            auto store = static_cast<Instruction_Store *>(inst);
+
+            u8 target = emit_load_of_value(object, function, code_section, data_section, store->store_target);
+            u8 source = emit_load_of_value(object, function, code_section, data_section, store->source_value);
+            move_reg64_to_memory(&code_section->data, source, target, 0);
+            break;
+        }
+
         case INSTRUCTION_CALL: {
             auto call = static_cast<Instruction_Call *>(inst);
 
             u8 index = 0;
             for (auto p : call->parameters) {
-                emit_load_of_value(object, code_section, data_section, p, RAX);
-
                 u8 param_reg = get_next_system_v_abi_register(&index);
-                Mov_Reg_to_Reg_64(&code_section->data, RAX, param_reg);
+                u8 result = emit_load_of_value(object, function, code_section, data_section, p);
+
+                if (result != param_reg) move_reg64_to_reg64(&code_section->data, result, param_reg);
             }
 
             // load number of floating point parameters into %al
@@ -546,11 +762,24 @@ void emit_instruction(Linker_Object *object, Section *code_section, Section *dat
 
             code_section->relocations.add(reloc);
 
-            break;
+            return RAX;
         }
 
         case INSTRUCTION_RETURN: {
-            Pop_Reg_64(&code_section->data, RBP);
+            u32 *stack_size_target = add_imm32_to_reg64(&code_section->data, RSP, 0);
+            function->stack_size_fixups.add(stack_size_target);
+
+
+            // :WastefulPushPops:
+            pop_reg64(&code_section->data, RSI);
+            pop_reg64(&code_section->data, RCX);
+            pop_reg64(&code_section->data, RDX);
+            pop_reg64(&code_section->data, RBX);
+            pop_reg64(&code_section->data, RAX);
+            pop_reg64(&code_section->data, RDI);
+            
+
+            pop_reg64(&code_section->data, RBP);
 
             code_section->data.append_byte(0xC3);
             break;
@@ -558,6 +787,8 @@ void emit_instruction(Linker_Object *object, Section *code_section, Section *dat
 
         default: assert(false);
     }
+
+    return 0;
 }
 
 void emit_function(Linker_Object *object, Section *code_section, Section *data_section, Function *function) {
@@ -568,14 +799,59 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
     if (!sym->is_externally_defined) sym->section_number = code_section->section_number;
     sym->section_offset = code_section->data.size();
 
-    Push_Reg_64(&code_section->data, RBP);
+    function->register_usage.resize(RBX);
+
+    u8 count = RAX;
+    for (auto &reg : function->register_usage) {
+        reg.machine_reg = count;
+        reg.is_free = true;
+
+        ++count;
+    }
+
+    push_reg64(&code_section->data, RBP);
+
+    // :WastefulPushPops: @Cleanup pushing all the registers we may need is
+    // a bit excessive and wasteful.
+    push_reg64(&code_section->data, RDI);
+    push_reg64(&code_section->data, RAX);
+    push_reg64(&code_section->data, RBX);
+    push_reg64(&code_section->data, RDX);
+    push_reg64(&code_section->data, RCX);
+    push_reg64(&code_section->data, RSI);
+    
+    move_reg64_to_reg64(&code_section->data, RSP, RBP);
+
+    function->stack_size = 0;
 
     for (auto block : function->blocks) {
         for (auto inst : block->instructions) {
-            emit_instruction(object, code_section, data_section, inst);
+            if (inst->type == INSTRUCTION_ALLOCA) {
+                auto _alloca = static_cast<Instruction_Alloca *>(inst);
+
+                _alloca->stack_offset = function->stack_size;
+                function->stack_size += _alloca->alloca_type->size;
+            }
         }
     }
 
+
+    u32 *stack_size_target = sub_imm32_from_reg64(&code_section->data, RSP, 0);
+
+    for (auto block : function->blocks) {
+        for (auto inst : block->instructions) {
+            emit_instruction(object, function, code_section, data_section, inst);
+        }
+    }
+
+    // Ensure stack is 16-byte aligned.
+    if ((function->stack_size % 16)) function->stack_size += 16 - (function->stack_size % 16);
+
+    *stack_size_target = function->stack_size;
+
+    for (auto fixup : function->stack_size_fixups) {
+        *fixup = function->stack_size;
+    }
 }
 
 void emit_macho_file(Linker_Object *object) {
@@ -797,6 +1073,10 @@ int main(int argc, char **argv) {
 
     Basic_Block *block = new Basic_Block();
     main_func->blocks.add(block);
+
+    Instruction_Alloca *_alloca = make_alloca(make_integer_type(8));
+    block->instructions.add(_alloca);
+    block->instructions.add(make_store(make_integer_constant(1234), _alloca));
 
     Instruction_Call *call = new Instruction_Call();
     call->call_target = printf_func;
