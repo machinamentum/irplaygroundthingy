@@ -320,6 +320,7 @@ enum {
     INSTRUCTION_RETURN,
     INSTRUCTION_ALLOCA,
     INSTRUCTION_STORE,
+    INSTRUCTION_LOAD,
 
     INSTRUCTION_LAST,
 };
@@ -434,6 +435,20 @@ struct Instruction_Store : Instruction {
     Value *store_target = nullptr;
     Value *source_value = nullptr;
 };
+
+struct Instruction_Load : Instruction {
+    Instruction_Load() { type = INSTRUCTION_LOAD; }
+
+    Value *pointer_value = nullptr;
+};
+
+Instruction_Load *make_load(Value *pointer_value) {
+    assert(pointer_value->value_type->type == Type::POINTER);
+    Instruction_Load *load = new Instruction_Load();
+    load->pointer_value = pointer_value;
+    load->value_type    = pointer_value->value_type->pointer_to;
+    return load;
+}
 
 Instruction_Store *make_store(Value *source_value, Value *store_target) {
     Instruction_Store *store = new Instruction_Store();
@@ -578,6 +593,14 @@ void move_reg64_to_memory(Data_Buffer *dataptr, u8 src, u8 dst, u32 disp) {
     *value = disp;
 }
 
+void move_memory_to_reg64(Data_Buffer *dataptr, u8 dst, u8 src, u32 disp) {
+    dataptr->append_byte(REX(1, (dst & 0b1000) >> 3, 0, (src & 0b1000) >> 3));
+    dataptr->append_byte(0x8B);
+    dataptr->append_byte(ModRM(0b10, dst & 0b0111, src & 0b0111));
+    u32 *value = (u32  *)dataptr->allocate(4);
+    *value = disp;
+}
+
 void move_imm64_to_reg64(Data_Buffer *dataptr, u64 imm, u8 reg) {
     dataptr->append_byte(REX(1, 0, 0, 0));
     dataptr->append_byte(0xB8 + reg);
@@ -643,7 +666,7 @@ u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction
 
         function->claim_register(dataptr, reg->machine_reg, inst);
 
-        lea_into_reg64(dataptr, reg->machine_reg, RBP, inst->result_spilled_onto_stack);
+        move_memory_to_reg64(dataptr, reg->machine_reg, RBP, inst->result_spilled_onto_stack);
         return reg->machine_reg;
     }
 }
@@ -726,6 +749,24 @@ u8 emit_instruction(Linker_Object *object, Function *function, Section *code_sec
             u8 source = emit_load_of_value(object, function, code_section, data_section, store->source_value);
             move_reg64_to_memory(&code_section->data, source, target, 0);
             break;
+        }
+
+        case INSTRUCTION_LOAD: {
+            auto load = static_cast<Instruction_Load *>(inst);
+
+            u8 source = emit_load_of_value(object, function, code_section, data_section, load->pointer_value);
+
+            Register *reg = function->get_free_register();
+            if (!reg) {
+                reg = &function->register_usage[RAX];
+                function->maybe_spill_register(&code_section->data, reg);
+                reg->is_free = false;
+            }
+
+            function->claim_register(&code_section->data, reg->machine_reg, inst);
+
+            move_memory_to_reg64(&code_section->data, reg->machine_reg, source, 0);
+            return reg->machine_reg;
         }
 
         case INSTRUCTION_CALL: {
@@ -1078,10 +1119,13 @@ int main(int argc, char **argv) {
     block->instructions.add(_alloca);
     block->instructions.add(make_store(make_integer_constant(1234), _alloca));
 
+    Instruction_Load *load = make_load(_alloca);
+    block->instructions.add(load);
+
     Instruction_Call *call = new Instruction_Call();
     call->call_target = printf_func;
     call->parameters.add(make_string_constant("Hello World: %d\n"));
-    call->parameters.add(make_integer_constant(234));
+    call->parameters.add(load);
 
     block->instructions.add(call);
     block->instructions.add(new Instruction_Return());
