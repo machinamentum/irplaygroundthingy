@@ -444,20 +444,38 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
             data_section->data.append_byte(0);
 
 
-            // lea data-section-location(%rip), %reg
-            lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
+            if (object->use_absolute_addressing) {
+                // @Cutnpaste move_imm64_to_reg64
+                code_section->data.append_byte(REX(1, 0, 0, 0));
+                code_section->data.append_byte(0xB8 + reg->machine_reg);
 
-            Relocation reloc;
-            reloc.is_for_rip_call = false;
-            reloc.is_rip_relative = true;
-            reloc.offset = code_section->data.size();
-            reloc.symbol_index = data_section->symbol_index;
-            reloc.size = 4;
+                Relocation reloc;
+                reloc.is_for_rip_call = false;
+                reloc.offset = code_section->data.size();
+                reloc.symbol_index = data_section->symbol_index;
+                reloc.size = 8;
 
-            code_section->relocations.add(reloc);
+                u64 *addr = (u64 *)code_section->data.allocate(8);
+                *addr = data_sec_offset;;
+                reloc.addend = data_sec_offset;
 
-            u64 *value = (u64 *)code_section->data.allocate(4);
-            *value = data_sec_offset;
+                code_section->relocations.add(reloc);
+            } else {
+                // lea data-section-location(%rip), %reg
+                lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
+
+                Relocation reloc;
+                reloc.is_for_rip_call = false;
+                reloc.is_rip_relative = true;
+                reloc.offset = code_section->data.size();
+                reloc.symbol_index = data_section->symbol_index;
+                reloc.size = 4;
+
+                code_section->relocations.add(reloc);
+
+                u32 *value = (u32 *)code_section->data.allocate(4);
+                *value = data_sec_offset;
+            }
 
             // if (_register != RAX) move_reg64_to_reg64(&code_section->data, RAX, _register);
         } else if (constant->constant_type == Constant::INTEGER) {
@@ -588,22 +606,45 @@ u8 emit_instruction(Linker_Object *object, Function *function, Section *code_sec
             u64 *value = (u64 *)code_section->data.allocate(8);
             *value = 0;
 
+            if (object->use_absolute_addressing) {
+                function->maybe_spill_register(&code_section->data, &function->register_usage[RBX]);
 
-            code_section->data.append_byte(REX(1, 0, 0, 0));
-            code_section->data.append_byte(0xE8); // callq
-            // code_section->data.append_byte(ModRM(0b00, 0b000, 0b101));
+                // @Cutnpaste move_imm64_to_reg64
+                code_section->data.append_byte(REX(1, 0, 0, 0));
+                code_section->data.append_byte(0xB8 + RBX);
 
-            Relocation reloc;
-            reloc.is_for_rip_call = true;
-            reloc.offset = code_section->data.size();
-            reloc.symbol_index = get_symbol_index(object, static_cast<Function *>(call->call_target));
-            reloc.size = 4;
+                Relocation reloc;
+                reloc.is_for_rip_call = false;
+                reloc.offset = code_section->data.size();
+                reloc.symbol_index = get_symbol_index(object, static_cast<Function *>(call->call_target));
+                reloc.size = 8;
 
-            u32 *addr = (u32 *)code_section->data.allocate(4);
-            *addr = 0;
-            reloc.addend = 0; // @TODO
+                u64 *addr = (u64 *)code_section->data.allocate(8);
+                *addr = 0;
+                reloc.addend = 0; // @TODO
 
-            code_section->relocations.add(reloc);
+                code_section->relocations.add(reloc);
+
+                code_section->data.append_byte(REX(1, 0, 0, 0));
+                code_section->data.append_byte(0xFF); // callq reg
+                code_section->data.append_byte(ModRM(0b11, 2, RBX));
+            } else {
+                code_section->data.append_byte(REX(1, 0, 0, 0));
+                code_section->data.append_byte(0xE8); // callq rip-relative
+                // code_section->data.append_byte(ModRM(0b00, 0b000, 0b101));
+
+                Relocation reloc;
+                reloc.is_for_rip_call = true;
+                reloc.offset = code_section->data.size();
+                reloc.symbol_index = get_symbol_index(object, static_cast<Function *>(call->call_target));
+                reloc.size = 4;
+
+                u32 *addr = (u32 *)code_section->data.allocate(4);
+                *addr = 0;
+                reloc.addend = 0; // @TODO
+
+                code_section->relocations.add(reloc);
+            }
 
             if (target_system == TARGET_WIN32) {
                 add_imm32_to_reg64(&code_section->data, RSP, 32);
@@ -648,7 +689,7 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
     if (!sym->is_externally_defined) sym->section_number = code_section->section_number;
     sym->section_offset = code_section->data.size();
 
-    function->register_usage.resize(RBX);
+    function->register_usage.resize(RBX+1);
 
     u8 count = RAX;
     for (auto &reg : function->register_usage) {
@@ -703,9 +744,7 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
     }
 }
 
-void emit_obj_file(Compilation_Unit *unit) {
-    Linker_Object object = {};
-
+void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *text_index, u32 *data_index) {
     u32 data_sec_index = 0;
     u32 text_sec_index = 0;
 
@@ -718,8 +757,8 @@ void emit_obj_file(Compilation_Unit *unit) {
         } else {
             data_sec.name = ".data";
         }
-        data_sec.section_number = object.sections.count+1;
-        data_sec.symbol_index = object.symbol_table.count;
+        data_sec.section_number = object->sections.count+1;
+        data_sec.symbol_index = object->symbol_table.count;
         data_sec.is_writable = true;
 
         Symbol sym;
@@ -730,11 +769,11 @@ void emit_obj_file(Compilation_Unit *unit) {
         sym.is_function = false;
         sym.is_section  = true;
 
-        object.symbol_table.add(sym);
+        object->symbol_table.add(sym);
 
         data_sec_index = data_sec.section_number-1;
 
-        object.sections.add(data_sec);
+        object->sections.add(data_sec);
     }
 
     {
@@ -746,8 +785,8 @@ void emit_obj_file(Compilation_Unit *unit) {
         } else {
             text_sec.name = ".text";
         }
-        text_sec.section_number = object.sections.count+1;
-        text_sec.symbol_index = object.symbol_table.count;
+        text_sec.section_number = object->sections.count+1;
+        text_sec.symbol_index = object->symbol_table.count;
         text_sec.is_pure_instructions = true;
 
         Symbol sym;
@@ -758,17 +797,25 @@ void emit_obj_file(Compilation_Unit *unit) {
         sym.is_function = false;
         sym.is_section  = true;
 
-        object.symbol_table.add(sym);
+        object->symbol_table.add(sym);
 
         text_sec_index = text_sec.section_number-1;
 
-        object.sections.add(text_sec);
+        object->sections.add(text_sec);
     }
 
     for (auto func : unit->functions) {
-        emit_function(&object, &object.sections[text_sec_index], &object.sections[data_sec_index], func);
+        emit_function(object, &object->sections[text_sec_index], &object->sections[data_sec_index], func);
     }
 
+    if (text_index) *text_index = text_sec_index;
+    if (data_index) *data_index = data_sec_index;
+}
+
+void emit_obj_file(Compilation_Unit *unit) {
+    Linker_Object object = {};
+
+    generate_linker_object(unit, &object, nullptr, nullptr);
 
     void emit_macho_file(Linker_Object *object);
     void emit_coff_file(Linker_Object *object);
@@ -780,6 +827,72 @@ void emit_obj_file(Compilation_Unit *unit) {
     }
 }
 
+#ifndef _WIN32
+#include <sys/mman.h>
+#include <dlfcn.h>
+
+void do_jit_and_run_program_main(Compilation_Unit *unit) {
+    // @Cutnpaste from emit_obj_file
+    Linker_Object object = {};
+    object.use_absolute_addressing = true;
+
+    u32 data_sec_index = 0;
+    u32 text_sec_index = 0;
+
+    generate_linker_object(unit, &object, &text_sec_index, &data_sec_index);
+
+    auto code_section = &object.sections[text_sec_index];
+    auto data_section = &object.sections[data_sec_index];
+
+    char *text_memory = (char *)mmap(nullptr, code_section->data.size(), PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT, -1, 0);
+    char *data_memory = (char *)malloc(data_section->data.size());
+
+    int written = 0;
+    for (auto &c : code_section->data.chunks) {
+        memcpy(text_memory + written, c.data, c.count);
+        written += c.count;
+    }
+
+    written = 0;
+    for (auto &c : data_section->data.chunks) {
+        memcpy(data_memory + written, c.data, c.count);
+        written += c.count;
+    }
+
+    Array<char *> section_memory;
+    section_memory.add(data_memory);
+    section_memory.add(text_memory);
+
+    void *process_handle = dlopen(nullptr, RTLD_LAZY);
+
+    for (auto reloc : code_section->relocations) {
+        bool rip = reloc.is_for_rip_call || reloc.is_rip_relative;
+
+        if (rip) assert(reloc.size == 4);
+        else     assert(reloc.size == 8);
+
+        auto target = text_memory + reloc.offset;
+        auto symbol = &object.symbol_table[reloc.symbol_index];
+
+        if (symbol->is_externally_defined) {
+            auto symbol_target = (char *)dlsym(process_handle, symbol->linkage_name.data);
+            assert(symbol_target);
+
+            if   (rip) *(u32 *)target = (symbol_target - target);
+            else       *(u64 *)target = (u64) symbol_target;
+        } else {
+            auto symbol_sec    = section_memory[symbol->section_number-1];
+            auto symbol_target = symbol_sec;
+
+            if (rip) *(u32 *)target += (symbol_target - target);
+            else     *(u64 *)target += (u64) symbol_target;
+        }
+    }
+
+    void (*prog_main)() = (void (*)())text_memory;
+    prog_main();
+}
+#endif
 
 int main(int argc, char **argv) {
     Compilation_Unit unit;
@@ -818,6 +931,7 @@ int main(int argc, char **argv) {
 
 
     emit_obj_file(&unit);
+    // do_jit_and_run_program_main(&unit);
 
     return 0;
 }

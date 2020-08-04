@@ -48,6 +48,7 @@ enum Cpu_Arch {
 
 struct Linker_Object {
     Cpu_Arch cpuarch;
+    bool use_absolute_addressing = false;
     Array<Section> sections;
     Array<String>  string_table;
     Array<Symbol>  symbol_table;
