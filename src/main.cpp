@@ -321,6 +321,8 @@ enum {
     INSTRUCTION_ALLOCA,
     INSTRUCTION_STORE,
     INSTRUCTION_LOAD,
+    INSTRUCTION_ADD,
+    INSTRUCTION_SUB,
 
     INSTRUCTION_LAST,
 };
@@ -442,6 +444,37 @@ struct Instruction_Load : Instruction {
     Value *pointer_value = nullptr;
 };
 
+struct Instruction_Math_Binary_Op : Instruction {
+    Value *lhs;
+    Value *rhs;
+};
+
+struct Instruction_Add : Instruction_Math_Binary_Op {
+    Instruction_Add() { type = INSTRUCTION_ADD; }
+};
+
+struct Instruction_Sub : Instruction_Math_Binary_Op {
+    Instruction_Sub() { type = INSTRUCTION_SUB; }
+};
+
+Instruction_Add *make_add(Value *lhs, Value *rhs) {
+    // @Incomplete assert that lhs and rhs types match
+    Instruction_Add *add = new Instruction_Add();
+    add->value_type = lhs->value_type;
+    add->lhs = lhs;
+    add->rhs = rhs;
+    return add;
+}
+
+Instruction_Sub *make_sub(Value *lhs, Value *rhs) {
+    // @Incomplete assert that lhs and rhs types match
+    Instruction_Sub *sub = new Instruction_Sub();
+    sub->value_type = lhs->value_type;
+    sub->lhs = lhs;
+    sub->rhs = rhs;
+    return sub;
+}
+
 Instruction_Load *make_load(Value *pointer_value) {
     assert(pointer_value->value_type->type == Type::POINTER);
     Instruction_Load *load = new Instruction_Load();
@@ -511,7 +544,6 @@ struct Function : Global_Value {
         if (claimer) {
             reg->currently_holding_result_of_instruction = claimer;
             claimer->result_stored_in = reg;
-            claimer->result_spilled_onto_stack = 0;
         }
 
         reg->is_free = false;
@@ -653,6 +685,19 @@ u32 *add_imm32_to_reg64(Data_Buffer *dataptr, u8 reg, u32 value) {
     return operand;
 }
 
+void add_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst) {
+    dataptr->append_byte(REX(1, (src & 0b1000) >> 3, 0, (dst & 0b1000) >> 3));
+    dataptr->append_byte(0x01);
+    dataptr->append_byte(ModRM(0b11, (src & 0b0111),  (dst & 0b0111)));
+}
+
+void sub_reg64_from_reg64(Data_Buffer *dataptr, u8 src, u8 dst) {
+    dataptr->append_byte(REX(1, (src & 0b1000) >> 3, 0, (dst & 0b1000) >> 3));
+    dataptr->append_byte(0x29);
+    dataptr->append_byte(ModRM(0b11, (src & 0b0111),  (dst & 0b0111)));
+}
+
+
 u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction *inst) {
     if (auto reg = inst->result_stored_in) {
         return reg->machine_reg;
@@ -667,6 +712,7 @@ u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction
         function->claim_register(dataptr, reg->machine_reg, inst);
 
         move_memory_to_reg64(dataptr, reg->machine_reg, RBP, inst->result_spilled_onto_stack);
+        inst->result_spilled_onto_stack = 0xFFFFFFFF;
         return reg->machine_reg;
     }
 }
@@ -769,8 +815,32 @@ u8 emit_instruction(Linker_Object *object, Function *function, Section *code_sec
             return reg->machine_reg;
         }
 
+        case INSTRUCTION_SUB:
+        case INSTRUCTION_ADD: {
+            auto add = static_cast<Instruction_Add *>(inst);
+
+            // Ensure two registers are free for the operation
+            function->maybe_spill_register(&code_section->data, &function->register_usage[RAX]);
+            function->maybe_spill_register(&code_section->data, &function->register_usage[RCX]);
+
+            u8 lhs_reg = emit_load_of_value(object, function, code_section, data_section, add->lhs);
+            u8 rhs_reg = emit_load_of_value(object, function, code_section, data_section, add->rhs);
+
+            Register *reg = &function->register_usage[lhs_reg];
+            function->maybe_spill_register(&code_section->data, reg);
+            reg->is_free = false;
+
+            function->claim_register(&code_section->data, reg->machine_reg, inst);
+
+            if      (inst->type == INSTRUCTION_ADD) add_reg64_to_reg64(&code_section->data, rhs_reg, lhs_reg);
+            else if (inst->type == INSTRUCTION_SUB) sub_reg64_from_reg64(&code_section->data, rhs_reg, lhs_reg);
+            return reg->machine_reg;
+        }
+
         case INSTRUCTION_CALL: {
             auto call = static_cast<Instruction_Call *>(inst);
+
+            // __builtin_debugtrap();
 
             u8 index = 0;
             for (auto p : call->parameters) {
@@ -1122,10 +1192,16 @@ int main(int argc, char **argv) {
     Instruction_Load *load = make_load(_alloca);
     block->instructions.add(load);
 
+    Instruction_Add *add = make_add(load, make_integer_constant(2345));
+    block->instructions.add(add);
+
+    Instruction_Sub *sub = make_sub(add, make_integer_constant(79));
+    block->instructions.add(sub);
+
     Instruction_Call *call = new Instruction_Call();
     call->call_target = printf_func;
     call->parameters.add(make_string_constant("Hello World: %d\n"));
-    call->parameters.add(load);
+    call->parameters.add(sub);
 
     block->instructions.add(call);
     block->instructions.add(new Instruction_Return());
