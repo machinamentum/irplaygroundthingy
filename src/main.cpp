@@ -643,6 +643,8 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
     Symbol *sym = &object->symbol_table[symbol_index];
     sym->is_function = true;
     sym->is_externally_defined = (function->blocks.count == 0);
+    if (sym->is_externally_defined) return;
+
     if (!sym->is_externally_defined) sym->section_number = code_section->section_number;
     sym->section_offset = code_section->data.size();
 
@@ -768,11 +770,14 @@ void emit_obj_file(Compilation_Unit *unit) {
     }
 
 
-    // void emit_macho_file(Linker_Object *object);
-    // emit_macho_file(&object);
-
+    void emit_macho_file(Linker_Object *object);
     void emit_coff_file(Linker_Object *object);
-    emit_coff_file(&object);
+
+    if (target_system == TARGET_WIN32) {
+        emit_coff_file(&object);
+    } else if (target_system == TARGET_MACOSX) {
+        emit_macho_file(&object);
+    }
 }
 
 
