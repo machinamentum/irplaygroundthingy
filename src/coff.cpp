@@ -26,12 +26,14 @@ struct PE_Coff_Section_Header {
     u32 Characteristics;
 };
 
+const u64 PE_COFF_RELOCATION_SIZE = 10; // sizeof(PE_Coff_Relocation) is slightly larger than 10 bytes due to padding.
 struct PE_Coff_Relocation {
     u32 VirtualAddress;
     u32 SymbolTableIndex;
     u16 Type;
 };
 
+const u64 PE_COFF_SYMBOL_SIZE = 18; // sizeof(PE_Coff_Symbol) is slightly larger than 18 bytes due to padding.
 struct PE_Coff_Symbol {
     union {
         char ShortName[8];
@@ -54,6 +56,7 @@ const u16 IMAGE_FILE_MACHINE_ARM64   = 0xAA64;
 
 
 const u32 IMAGE_SCN_CNT_CODE         = 0x00000020;
+const u32 IMAGE_SCN_ALIGN_16BYTES    = 0x00500000;
 const u32 IMAGE_SCN_LNK_NRELOC_OVFL  = 0x01000000;
 const u32 IMAGE_SCN_MEM_EXECUTE      = 0x20000000;
 const u32 IMAGE_SCN_MEM_READ         = 0x40000000;
@@ -71,7 +74,7 @@ const u16 IMAGE_REL_AMD64_SECTION    = 0x000A;
 const u16 IMAGE_REL_AMD64_SECREL     = 0x000B;
 
 
-const u8 IMAGE_SYM_DTYPE_FUNCTION = 0x200;
+const u8 IMAGE_SYM_DTYPE_FUNCTION = 0x20;
 
 void emit_coff_file(Linker_Object *object) {
     Data_Buffer buffer;
@@ -100,7 +103,7 @@ void emit_coff_file(Linker_Object *object) {
         // section->PointerToRelocations = ;
         section->PointerToLinenumbers = 0;
 
-        u32 Characteristics = IMAGE_SCN_MEM_READ;
+        u32 Characteristics = IMAGE_SCN_MEM_READ | IMAGE_SCN_ALIGN_16BYTES;
 
         if (sect.is_writable)          Characteristics |= IMAGE_SCN_MEM_WRITE;
         if (sect.is_pure_instructions) Characteristics |= (IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_CNT_CODE);
@@ -126,17 +129,16 @@ void emit_coff_file(Linker_Object *object) {
         section->PointerToRelocations = buffer.size();
 
         if (section->Characteristics & IMAGE_SCN_LNK_NRELOC_OVFL) {
-            PE_Coff_Relocation *info = (PE_Coff_Relocation *)buffer.allocate(sizeof(PE_Coff_Relocation));
+            PE_Coff_Relocation *info = (PE_Coff_Relocation *)buffer.allocate(PE_COFF_RELOCATION_SIZE);
             info->VirtualAddress   = sect.relocations.count;
             info->SymbolTableIndex = 0;
             info->Type             = 0;
         }
 
         for (auto &reloc : sect.relocations) {
-            PE_Coff_Relocation *info = (PE_Coff_Relocation *)buffer.allocate(sizeof(PE_Coff_Relocation));
+            PE_Coff_Relocation *info = (PE_Coff_Relocation *)buffer.allocate(PE_COFF_RELOCATION_SIZE);
             info->VirtualAddress   = reloc.offset;
             info->SymbolTableIndex = reloc.symbol_index;
-
 
             u32 type = IMAGE_REL_AMD64_ADDR64;
             if (reloc.is_for_rip_call || reloc.is_rip_relative) type = IMAGE_REL_AMD64_REL32;
@@ -153,13 +155,11 @@ void emit_coff_file(Linker_Object *object) {
     header->PointerToSymbolTable = buffer.size();
 
     for (auto &symbol : object->symbol_table) {
-        PE_Coff_Symbol *sym = (PE_Coff_Symbol *)buffer.allocate(18 /*sizeof(PE_Coff_Symbol)*/); // sizeof(PE_Coff_Symbol) is slightly larger than 18 bytes due to padding.
+        PE_Coff_Symbol *sym = (PE_Coff_Symbol *)buffer.allocate(PE_COFF_SYMBOL_SIZE);
 
         if (symbol.linkage_name.length <= 8) {
             memset(sym->ShortName, 0, 8);
             memcpy(sym->ShortName, symbol.linkage_name.data, symbol.linkage_name.length);
-
-            printf("Linkage: %s\n", symbol.linkage_name.data);
         } else {
             sym->Zeroes = 0;
             sym->Offset = string_buffer.size();
@@ -181,15 +181,10 @@ void emit_coff_file(Linker_Object *object) {
         // printf("");
     }
 
-    printf("string buffer location: %X\n", buffer.size());
     u32 *string_table_size = (u32 *)buffer.allocate(4);
     *string_table_size = string_buffer.size() + 4; // +4 to include the string_table_size field itself.
 
     buffer.append(&string_buffer);
-
-    printf("String table size: %X\n", *string_table_size);
-
-    printf("PointerToSymbolTable: %X\n", header->PointerToSymbolTable);
 
     FILE *file = fopen("test.obj", "wb");
     for (auto &c : buffer.chunks) {
