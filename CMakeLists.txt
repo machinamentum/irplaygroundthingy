@@ -11,6 +11,8 @@ endif()
 
 set (IR_SRCS
     src/main.cpp
+    src/macho.cpp
+    src/coff.cpp
 )
 
 add_executable(ir ${IR_SRCS})
