@@ -285,7 +285,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
 
 #include <stdio.h>
 
-u8 emit_instruction(Linker_Object *object, Function *function, Section *code_section, Section *data_section, Instruction *inst) {
+u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *current_block, Section *code_section, Section *data_section, Instruction *inst) {
     switch (inst->type) {
         case INSTRUCTION_ALLOCA: {
             auto _alloca = static_cast<Instruction_Alloca *>(inst);
@@ -498,12 +498,22 @@ u8 emit_instruction(Linker_Object *object, Function *function, Section *code_sec
                 code_section->data.append_byte(ModRM(0b11, 4, fail_target & 0b0111));
             }
 
-            maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
-            u8 target = emit_load_of_value(object, function, code_section, data_section, branch->true_target);
+            Basic_Block *next_block = nullptr;
+            for (u64 i = 0; i < function->blocks.count-1; ++i) {
+                if (function->blocks[i] == current_block) {
+                    next_block = function->blocks[i+1];
+                    break;
+                }
+            }
 
-            code_section->data.append_byte(REX(1, 0, 0, 0));
-            code_section->data.append_byte(0xFF); // jmp reg
-            code_section->data.append_byte(ModRM(0b11, 4, target & 0b0111));
+            if (branch->true_target != next_block) {
+                maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
+                u8 target = emit_load_of_value(object, function, code_section, data_section, branch->true_target);
+
+                code_section->data.append_byte(REX(1, 0, 0, 0));
+                code_section->data.append_byte(0xFF); // jmp reg
+                code_section->data.append_byte(ModRM(0b11, 4, target & 0b0111));
+            }
             break;
         }
 
@@ -568,7 +578,7 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
         block->text_location = code_section->data.size();
 
         for (auto inst : block->instructions) {
-            emit_instruction(object, function, code_section, data_section, inst);
+            emit_instruction(object, function, block, code_section, data_section, inst);
         }
     }
 
