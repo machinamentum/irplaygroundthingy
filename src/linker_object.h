@@ -4,6 +4,47 @@
 
 #include "general.h"
 
+struct Global_Value;
+struct Compilation_Unit;
+
+struct Target {
+
+    enum Cpu_Arch {
+        CPU_UNDEFINED = 0,
+        CPU_X86_64    = 1,
+        CPU_AAarch64  = 2,
+    };
+
+    enum {
+        WINDOWS,
+        MACOSX,
+        LINUX,
+    };
+
+    u8 os;
+    u8 cpuarch;
+
+    bool is_win32() { return os == WINDOWS; }
+    bool is_macOS() { return os == MACOSX;  }
+};
+
+inline
+Target get_host_target() {
+    Target target;
+
+#ifdef _WIN32
+    target.os      = Target::WINDOWS;
+#elif __APPLE__
+    target.os      = Target::MACOSX;
+#else
+    target.os      = Target::LINUX;
+#endif
+
+    target.cpuarch = Target::CPU_X86_64;
+
+    return target;
+}
+
 struct Relocation {
     bool is_for_rip_call = false;
     bool is_rip_relative = false;
@@ -40,18 +81,22 @@ struct Symbol {
     bool is_section  = false;
 };
 
-enum Cpu_Arch {
-    CPU_UNDEFINED = 0,
-    CPU_X86_64    = 1,
-    CPU_AAarch64  = 2,
-};
+
 
 struct Linker_Object {
-    Cpu_Arch cpuarch;
+    Target target;
     bool use_absolute_addressing = false;
     Array<Section> sections;
     Array<String>  string_table;
     Array<Symbol>  symbol_table;
 };
+
+u32 get_symbol_index(Linker_Object *object, Global_Value *value);
+
+void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *text_index, u32 *data_index);
+
+void emit_obj_file(Compilation_Unit *unit);
+
+void do_jit_and_run_program_main(Compilation_Unit *unit);
 
 #endif
