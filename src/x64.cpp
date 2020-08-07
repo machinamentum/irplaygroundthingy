@@ -138,10 +138,11 @@ void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
         if (inst->result_spilled_onto_stack == 0xFFFFFFFF) {
             func->stack_size += 8; // @TargetInfo
             inst->result_spilled_onto_stack = func->stack_size;
-            
-            reg->currently_holding_result_of_instruction = nullptr;
-            move_reg_to_memory(dataptr, reg->machine_reg, RBP, -inst->result_spilled_onto_stack, inst->value_type->size);
         }
+
+        assert(inst->result_spilled_onto_stack != 0);
+        move_reg_to_memory(dataptr, reg->machine_reg, RBP, -inst->result_spilled_onto_stack, inst->value_type->size);
+        reg->currently_holding_result_of_instruction = nullptr;
     }
 
     reg->is_free = true;
@@ -190,6 +191,8 @@ u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction
 
         function->claim_register(dataptr, reg->machine_reg, inst);
 
+        assert(inst->result_spilled_onto_stack != 0);
+        assert(inst->result_spilled_onto_stack != 0xFFFFFFFF);
         move_memory_to_reg(dataptr, reg->machine_reg, RBP, -inst->result_spilled_onto_stack, inst->value_type->size);
         // inst->result_spilled_onto_stack = 0xFFFFFFFF;
         return reg->machine_reg;
@@ -299,6 +302,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             function->claim_register(&code_section->data, reg->machine_reg, _alloca);
 
+            assert(_alloca->stack_offset != 0);
             lea_into_reg64(&code_section->data, reg->machine_reg, RBP, -_alloca->stack_offset);
             return reg->machine_reg;
         }
@@ -321,13 +325,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             u8 source = emit_load_of_value(object, function, code_section, data_section, load->pointer_value);
 
-            Register *reg = function->get_free_register();
-            if (!reg) {
-                reg = &function->register_usage[RAX];
-                maybe_spill_register(function, &code_section->data, reg);
-                reg->is_free = false;
-            }
-
+            Register *reg = &function->register_usage[source];
             function->claim_register(&code_section->data, reg->machine_reg, inst);
 
             move_memory_to_reg(&code_section->data, reg->machine_reg, source, 0, load->value_type->size);
@@ -479,14 +477,19 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
         case INSTRUCTION_BRANCH: {
             Instruction_Branch *branch = static_cast<Instruction_Branch *>(inst);
 
-            if (branch->condition) {
-                maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
-                u8 fail_target = emit_load_of_value(object, function, code_section, data_section, branch->failure_target);
+            // Spill all scratch registers at branches in case that we branch
+            // to much earlier code that expects all registers to be free.
+            // This may not totally be correct, but works for now. -josh 7 August 2020
+            for (auto &reg : function->register_usage) {
+                maybe_spill_register(function, &code_section->data, &reg);
+            }
 
-                maybe_spill_register(function, &code_section->data, &function->register_usage[RCX]);
+            if (branch->condition) {
                 u8 cond = emit_load_of_value(object, function, code_section, data_section, branch->condition);
                 sub_imm32_from_reg64(&code_section->data, cond, 0, branch->condition->value_type->size);
 
+                maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
+                u8 fail_target = emit_load_of_value(object, function, code_section, data_section, branch->failure_target);
 
                 code_section->data.append_byte(0x0F);
                 code_section->data.append_byte(0x85); // jne if cond if true goto true block
@@ -507,7 +510,6 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             }
 
             if (branch->true_target != next_block) {
-                maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
                 u8 target = emit_load_of_value(object, function, code_section, data_section, branch->true_target);
 
                 code_section->data.append_byte(REX(1, 0, 0, 0));
