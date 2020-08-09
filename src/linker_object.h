@@ -58,7 +58,7 @@ struct Section {
     String name;
     String segment;
     Data_Buffer data;
-    u32 section_number;
+    u8 section_number;
     u32 symbol_index = 0;
 
     Array<Relocation> relocations;
@@ -73,7 +73,7 @@ struct Section {
 
 struct Symbol {
     String linkage_name;
-    u32 section_number  = 0;
+    u8 section_number  = 0;
     u32 section_offset  = 0;
     bool is_externally_defined  = false;
     bool is_externally_visible  = true;

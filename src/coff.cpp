@@ -82,7 +82,6 @@ void emit_coff_file(Linker_Object *object) {
     PE_Coff_Header *header = (PE_Coff_Header *)buffer.allocate(sizeof(PE_Coff_Header));
     header->Machine              = IMAGE_FILE_MACHINE_AMD64;
 
-    assert(object->sections.count <= U16_MAX);
     header->NumberOfSections     = static_cast<u16>(object->sections.count);
     header->TimeDateStamp        = 0; // @TODO
     // header->PointerToSymbolTable = ;
@@ -178,8 +177,7 @@ void emit_coff_file(Linker_Object *object) {
             string_buffer.append(symbol.linkage_name.data, symbol.linkage_name.length);
         }
 
-        assert(symbol.section_number <= U16_MAX);
-        sym->SectionNumber = static_cast<u16>(symbol.section_number);
+        sym->SectionNumber = symbol.section_number;
         sym->Value = symbol.section_offset;
      
         if (symbol.is_function) {

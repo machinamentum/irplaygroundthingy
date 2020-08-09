@@ -3,10 +3,12 @@
 
 u32 get_symbol_index(Linker_Object *object, Global_Value *value) {
     if (value->symbol_index == 0) {
-        value->symbol_index = object->symbol_table.count;
+        value->symbol_index = static_cast<u32>(object->symbol_table.count);
         Symbol s;
         s.linkage_name = value->name;
         object->symbol_table.add(s);
+
+        assert(object->symbol_table.count <= U32_MAX);
     }
 
     return value->symbol_index;
@@ -27,8 +29,8 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
         } else {
             data_sec.name = ".data";
         }
-        data_sec.section_number = object->sections.count+1;
-        data_sec.symbol_index = object->symbol_table.count;
+        data_sec.section_number = static_cast<u8>(object->sections.count+1);
+        data_sec.symbol_index = static_cast<u32>(object->symbol_table.count);
         data_sec.is_writable = true;
 
         Symbol sym;
@@ -55,8 +57,8 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
         } else {
             text_sec.name = ".text";
         }
-        text_sec.section_number = object->sections.count+1;
-        text_sec.symbol_index = object->symbol_table.count;
+        text_sec.section_number = static_cast<u8>(object->sections.count+1);
+        text_sec.symbol_index = static_cast<u32>(object->symbol_table.count);
         text_sec.is_pure_instructions = true;
 
         Symbol sym;
@@ -77,6 +79,9 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
     for (auto func : unit->functions) {
         emit_function(object, &object->sections[text_sec_index], &object->sections[data_sec_index], func);
     }
+
+    assert(object->symbol_table.count <= U32_MAX);
+    assert(object->sections.count     <= U8_MAX);
 
     if (text_index) *text_index = text_sec_index;
     if (data_index) *data_index = data_sec_index;
@@ -143,6 +148,11 @@ void do_jit_and_run_program_main(Compilation_Unit *unit) {
         if (rip) assert(reloc.size == 4);
         else     assert(reloc.size == 8);
 
+        // RIP addressing doesnt work here because we cannot gaurantee that data symbols are
+        // within 2gbs of the target. @FixMe we could gaurantee this for RIP-relative calls
+        // into code within the same .text section.
+        assert(!rip);
+
         auto target = text_memory + reloc.offset;
         auto symbol = &object.symbol_table[reloc.symbol_index];
 
@@ -150,13 +160,13 @@ void do_jit_and_run_program_main(Compilation_Unit *unit) {
             auto symbol_target = (char *)dlsym(process_handle, symbol->linkage_name.data);
             assert(symbol_target);
 
-            if   (rip) *(u32 *)target = (symbol_target - target);
+            if   (rip) *(u32 *)target = (u32)(symbol_target - target);
             else       *(u64 *)target = (u64) symbol_target;
         } else {
             auto symbol_sec    = section_memory[symbol->section_number-1];
             auto symbol_target = symbol_sec;
 
-            if (rip) *(u32 *)target += (symbol_target - target);
+            if (rip) *(u32 *)target += (u32)(symbol_target - target);
             else     *(u64 *)target += (u64) symbol_target;
         }
     }

@@ -19,6 +19,7 @@ typedef int32_t  s32;
 typedef int16_t  s16;
 typedef int8_t   s8;
 
+const u8  U8_MAX  = 0xFF;
 const u16 U16_MAX = 0xFFFF;
 const u32 U32_MAX = 0xFFFFFFFF;
 

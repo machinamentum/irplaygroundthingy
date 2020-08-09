@@ -248,7 +248,7 @@ struct Basic_Block : Value {
 
 struct Global_Value : Constant {
     String name;
-    u64 symbol_index = 0;
+    u32 symbol_index = 0;
 };
 
 
