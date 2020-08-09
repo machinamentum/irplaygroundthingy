@@ -40,8 +40,8 @@ struct PE_Coff_Symbol {
         struct {
             u32 Zeroes;
             u32 Offset;
-        };
-    };
+        } LongName;
+    } Name;
 
     u32 Value;
     u16 SectionNumber;
@@ -81,10 +81,14 @@ void emit_coff_file(Linker_Object *object) {
 
     PE_Coff_Header *header = (PE_Coff_Header *)buffer.allocate(sizeof(PE_Coff_Header));
     header->Machine              = IMAGE_FILE_MACHINE_AMD64;
-    header->NumberOfSections     = object->sections.count;
+
+    assert(object->sections.count <= U16_MAX);
+    header->NumberOfSections     = static_cast<u16>(object->sections.count);
     header->TimeDateStamp        = 0; // @TODO
     // header->PointerToSymbolTable = ;
-    header->NumberOfSymbols      = object->symbol_table.count;
+
+    assert(object->symbol_table.count <= U32_MAX);
+    header->NumberOfSymbols      = static_cast<u32>(object->symbol_table.count);
     header->SizeOfOptionalHeader = 0;
     header->Characteristics      = 0;
 
@@ -96,9 +100,12 @@ void emit_coff_file(Linker_Object *object) {
         sect.mach_section = section;
 
         memcpy(section->Name, sect.name.data, sect.name.length);
-        section->VirtualSize    = sect.data.size();
+
+        assert(sect.data.size() <= U32_MAX);
+        u32 data_size = static_cast<u32>(sect.data.size());
+        section->VirtualSize    = data_size;
         section->VirtualAddress = 0;
-        section->SizeOfRawData  = sect.data.size();
+        section->SizeOfRawData  = data_size;
         // section->PointerToRawData = ; 
         // section->PointerToRelocations = ;
         section->PointerToLinenumbers = 0;
@@ -122,15 +129,19 @@ void emit_coff_file(Linker_Object *object) {
     for (auto &sect : object->sections) {
         PE_Coff_Section_Header *section = (PE_Coff_Section_Header *)sect.mach_section;
 
-        section->PointerToRawData = buffer.size();
+        assert(buffer.size() <= U32_MAX);
+        section->PointerToRawData = static_cast<u32>(buffer.size());
 
         buffer.append(&sect.data);
 
-        section->PointerToRelocations = buffer.size();
+        assert(buffer.size() <= U32_MAX);
+        section->PointerToRelocations = static_cast<u32>(buffer.size());
 
         if (section->Characteristics & IMAGE_SCN_LNK_NRELOC_OVFL) {
             PE_Coff_Relocation *info = (PE_Coff_Relocation *)buffer.allocate(PE_COFF_RELOCATION_SIZE);
-            info->VirtualAddress   = sect.relocations.count;
+
+            assert(sect.relocations.count <= U32_MAX);
+            info->VirtualAddress   = static_cast<u32>(sect.relocations.count);
             info->SymbolTableIndex = 0;
             info->Type             = 0;
         }
@@ -140,7 +151,7 @@ void emit_coff_file(Linker_Object *object) {
             info->VirtualAddress   = reloc.offset;
             info->SymbolTableIndex = reloc.symbol_index;
 
-            u32 type = IMAGE_REL_AMD64_ADDR64;
+            u16 type = IMAGE_REL_AMD64_ADDR64;
             if (reloc.is_for_rip_call || reloc.is_rip_relative) type = IMAGE_REL_AMD64_REL32;
 
             if (type == IMAGE_REL_AMD64_ADDR64) assert(reloc.size == 8);
@@ -152,21 +163,23 @@ void emit_coff_file(Linker_Object *object) {
     Data_Buffer string_buffer;
     string_buffer.append_byte(0);
 
-    header->PointerToSymbolTable = buffer.size();
+    assert(buffer.size() <= U32_MAX);
+    header->PointerToSymbolTable = static_cast<u32>(buffer.size());
 
     for (auto &symbol : object->symbol_table) {
         PE_Coff_Symbol *sym = (PE_Coff_Symbol *)buffer.allocate(PE_COFF_SYMBOL_SIZE);
 
         if (symbol.linkage_name.length <= 8) {
-            memset(sym->ShortName, 0, 8);
-            memcpy(sym->ShortName, symbol.linkage_name.data, symbol.linkage_name.length);
+            memset(sym->Name.ShortName, 0, 8);
+            memcpy(sym->Name.ShortName, symbol.linkage_name.data, symbol.linkage_name.length);
         } else {
-            sym->Zeroes = 0;
-            sym->Offset = string_buffer.size();
+            sym->Name.LongName.Zeroes = 0;
+            sym->Name.LongName.Offset = static_cast<u32>(string_buffer.size());
             string_buffer.append(symbol.linkage_name.data, symbol.linkage_name.length);
         }
 
-        sym->SectionNumber = symbol.section_number;
+        assert(symbol.section_number <= U16_MAX);
+        sym->SectionNumber = static_cast<u16>(symbol.section_number);
         sym->Value = symbol.section_offset;
      
         if (symbol.is_function) {
@@ -181,16 +194,17 @@ void emit_coff_file(Linker_Object *object) {
         // printf("");
     }
 
+    assert(string_buffer.size() <= (U32_MAX-4));
     u32 *string_table_size = (u32 *)buffer.allocate(4);
-    *string_table_size = string_buffer.size() + 4; // +4 to include the string_table_size field itself.
+    *string_table_size = static_cast<u32>(string_buffer.size()) + 4; // +4 to include the string_table_size field itself.
 
     buffer.append(&string_buffer);
 
     FILE *file = fopen("test.obj", "wb");
     for (auto &c : buffer.chunks) {
-        int amount = c.count;
+        size_t amount = c.count;
         do {
-            int written = fwrite(c.data, 1, amount, file);
+            size_t written = fwrite(c.data, 1, amount, file);
             amount -= written;
         } while (amount > 0);
     }

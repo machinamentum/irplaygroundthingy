@@ -5,7 +5,7 @@ project(ir)
 include_directories(src)
 
 if (UNIX)
-    add_definitions(--std=c++11 -fno-rtti)
+    add_definitions(--std=c++11 -fno-rtti -fno-exceptions -Wall -Wextra -pedantic -Wconversion -Wno-c++14-binary-literal -Wno-unused-const-variable)
 endif()
 
 

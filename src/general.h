@@ -19,15 +19,18 @@ typedef int32_t  s32;
 typedef int16_t  s16;
 typedef int8_t   s8;
 
+const u16 U16_MAX = 0xFFFF;
+const u32 U32_MAX = 0xFFFFFFFF;
+
 template <typename T>
 struct Array {
     T *data = nullptr;
-    u64 count    = 0;
-    u64 reserved = 0;
+    size_t count    = 0;
+    size_t reserved = 0;
 
-    static const u64 DEFAULT_ARRAY_RESERVE_SIZE = 16;
+    static const size_t DEFAULT_ARRAY_RESERVE_SIZE = 16;
 
-    void reserve(u64 amount) {
+    void reserve(size_t amount) {
         if (amount <= reserved) return;
         if (amount < DEFAULT_ARRAY_RESERVE_SIZE) amount = DEFAULT_ARRAY_RESERVE_SIZE;
 
@@ -35,7 +38,7 @@ struct Array {
         reserved = amount;
     }
 
-    void resize(u64 amount) {
+    void resize(size_t amount) {
         auto old_amount = count;
         reserve(amount);
         count = amount;
@@ -59,7 +62,7 @@ struct Array {
         reserved = 0;
     }
 
-    T &operator[](u64 index) {
+    T &operator[](size_t index) {
         assert(index < count);
         return data[index];
     }
@@ -77,7 +80,7 @@ struct Array {
 
 struct String {
     char *data;
-    u64   length;
+    size_t   length;
 
     String(const char *s = nullptr) {
         data = const_cast<char *>(s);
@@ -88,8 +91,8 @@ struct String {
 struct Data_Buffer {
     struct Chunk {
         u8 *data      = nullptr;
-        u64 count     = 0;
-        u64 reserved  = 0;
+        size_t count     = 0;
+        size_t reserved  = 0;
     };
 
     Array<Chunk> chunks;
@@ -98,7 +101,7 @@ struct Data_Buffer {
         new_chunk();
     }
 
-    Chunk *new_chunk(u64 size = 4096) {
+    Chunk *new_chunk(size_t size = 4096) {
         if (size < 4096) size = 4096;
         Chunk c;
         c.data     = (u8 *)malloc(size);
@@ -109,7 +112,7 @@ struct Data_Buffer {
         return &chunks[chunks.count-1];
     }
 
-    void append(void *src, u64 size) {
+    void append(void *src, size_t size) {
         Chunk *c = &chunks[chunks.count-1];
         if (c->count+size >= c->reserved) c = new_chunk(size);
 
@@ -117,7 +120,7 @@ struct Data_Buffer {
         c->count += size;
     }
 
-    void *allocate(u64 size) {
+    void *allocate(size_t size) {
         Chunk *c = &chunks[chunks.count-1];
         if (c->count+size >= c->reserved) c = new_chunk(size);
 
@@ -136,8 +139,8 @@ struct Data_Buffer {
         append(&byte, 1);
     }
 
-    u64 size() {
-        u64 size = 0;
+    size_t size() {
+        size_t size = 0;
         for (auto &c : chunks) {
             size += c.count;
         }
