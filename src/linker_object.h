@@ -26,6 +26,7 @@ struct Target {
 
     bool is_win32() { return os == WINDOWS; }
     bool is_macOS() { return os == MACOSX;  }
+    bool is_system_v() { return os == MACOSX || os == LINUX; }
 };
 
 inline

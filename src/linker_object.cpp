@@ -139,6 +139,8 @@ typedef HMODULE dl_handle;
 #endif
 
 void do_jit_and_run_program_main(Compilation_Unit *unit) {
+    assert(sizeof(void *) == 8); // 32-bit mode unsupported right now @TODO
+
     // @Cutnpaste from emit_obj_file
     Linker_Object object = {};
     object.target = unit->target;

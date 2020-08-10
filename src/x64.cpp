@@ -19,6 +19,7 @@ const u8 R9  = 9;
 // instructions correctly ????
 #define REX(W, R, X, B) ((u8)(0x40 | ((W) << 3) | ((R) << 2) | ((X) << 1) | (B)))
 #define ModRM(mod, reg, rm) ((u8)(((mod) << 6) | ((reg) << 3) | (rm)))
+#define SIB(scale, index, base) ((u8)(((scale) << 5) | ((index) << 3) | (base)))
 
 #define BIT3(v) ((v & (1 << 3)) >> 3)
 #define LOW3(v) (v & 0x7)
@@ -53,11 +54,13 @@ void move_memory_to_reg(Data_Buffer *dataptr, u8 dst, u8 src, s32 disp, u32 size
     *value = disp;
 }
 
-void move_imm64_to_reg64(Data_Buffer *dataptr, u64 imm, u8 reg) {
+u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 imm, u8 reg) {
     dataptr->append_byte(REX(1, 0, 0, 0));
     dataptr->append_byte(0xB8 + reg);
     u64 *value = (u64 *)dataptr->allocate(8);
     *value = imm;
+
+    return value;
 }
 
 // Need to allocate 4 bytes of space after this call
@@ -141,10 +144,9 @@ void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
         if (inst->result_spilled_onto_stack == 0) {
             func->stack_size += 8; // @TargetInfo
             inst->result_spilled_onto_stack = func->stack_size;
+            move_reg_to_memory(dataptr, reg->machine_reg, RBP, -inst->result_spilled_onto_stack, inst->value_type->size);
         }
 
-        assert(inst->result_spilled_onto_stack != 0);
-        move_reg_to_memory(dataptr, reg->machine_reg, RBP, -inst->result_spilled_onto_stack, inst->value_type->size);
         reg->currently_holding_result_of_instruction = nullptr;
     }
 
@@ -319,6 +321,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             u8 target = emit_load_of_value(object, function, code_section, data_section, store->store_target);
             u8 source = emit_load_of_value(object, function, code_section, data_section, store->source_value);
+
             move_reg_to_memory(&code_section->data, source, target, 0, (u8) store->store_target->value_type->pointer_to->size);
             break;
         }
@@ -396,19 +399,29 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
                 assert(param_reg != 0xFF);
 
+                for (auto &reg : function->register_usage) {
+                    if (reg.machine_reg == param_reg) {
+                        maybe_spill_register(function, &code_section->data, &function->register_usage[reg.machine_reg]);
+                        reg.is_free = false;
+                        break;
+                    }
+                }
+
                 u8 result = emit_load_of_value(object, function, code_section, data_section, p);
 
                 if (result != param_reg) move_reg64_to_reg64(&code_section->data, result, param_reg);
             }
 
-            // Spill RAX
-            maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
+            if (object->target.is_system_v()) {
+                // Spill RAX
+                maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
 
-            // load number of floating point parameters into %al
-            code_section->data.append_byte(REX(1, 0, 0, 0));
-            code_section->data.append_byte(0xB8 + RAX);
-            u64 *value = (u64 *)code_section->data.allocate(8);
-            *value = 0;
+                // load number of floating point parameters into %al
+                code_section->data.append_byte(REX(1, 0, 0, 0));
+                code_section->data.append_byte(0xB8 + RAX);
+                u64 *value = (u64 *)code_section->data.allocate(8);
+                *value = 0;
+            }
 
             if (object->use_absolute_addressing) {
                 maybe_spill_register(function, &code_section->data, &function->register_usage[RBX]);
@@ -561,8 +574,6 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
     
     move_reg64_to_reg64(&code_section->data, RSP, RBP);
 
-    function->stack_size = 0;
-
     for (auto block : function->blocks) {
         for (auto inst : block->instructions) {
             if (inst->type == INSTRUCTION_ALLOCA) {
@@ -579,6 +590,35 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
 
     u32 *stack_size_target = sub_imm32_from_reg64(&code_section->data, RSP, 0, 8);
     function->stack_size_fixups.add(stack_size_target);
+
+    // Touch stack pages from top to bottom
+    // to release stack pages from the page guard system.
+    if (object->target.is_win32()) {
+        u64 *move_stack_size_to_rax = move_imm64_to_reg64(&code_section->data, 0, RAX);
+        function->stack_size_fixups.add(reinterpret_cast<u32 *>(move_stack_size_to_rax));
+
+        auto loop_start = code_section->data.size();
+        sub_imm32_from_reg64(&code_section->data, RAX, 4096, 8);
+
+
+        // @Cutnpaste from move_reg_to_memory
+        auto dataptr = &code_section->data;
+        dataptr->append_byte(REX(1, BIT3(RAX), 0, BIT3(RSP)));
+
+        dataptr->append_byte(0x89);
+        dataptr->append_byte(ModRM(0x0, LOW3(RAX), LOW3(RSP)));
+        dataptr->append_byte(SIB(0, RAX, RSP));
+
+        code_section->data.append_byte(0x0F);
+        code_section->data.append_byte(0x8C); // jl if RAX < 0 break
+        u32 *disp = (u32 *)code_section->data.allocate(4);
+        *disp = 5; // skip the next jmp instruction
+
+        code_section->data.append_byte(0xE9); // jmp loop start
+        disp = (u32 *)code_section->data.allocate(4);
+        *disp = (loop_start - code_section->data.size()); // skip the next jmp instruction
+    }
+
 
     for (auto block : function->blocks) {
         block->text_location = code_section->data.size();
