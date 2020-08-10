@@ -107,6 +107,37 @@ void emit_obj_file(Compilation_Unit *unit) {
 #include <sys/mman.h>
 #include <dlfcn.h>
 
+static
+void *dl_open(char *path) {
+    return dlopen(path, RTLD_LAZY);
+}
+
+static
+void *dl_sym(void *handle, char *name) {
+    return dlsym(handle, name);
+}
+
+typedef void *dl_handle;
+
+#else
+#include <Windows.h>
+#include <Memoryapi.h>
+
+static
+HMODULE dl_open(char *path) {
+    if (path == nullptr) return GetModuleHandle(NULL);
+
+    return LoadLibraryA(path);
+}
+
+static
+void *dl_sym(HMODULE handle, char *name) {
+    return GetProcAddress(handle, name);
+}
+
+typedef HMODULE dl_handle;
+#endif
+
 void do_jit_and_run_program_main(Compilation_Unit *unit) {
     // @Cutnpaste from emit_obj_file
     Linker_Object object = {};
@@ -121,7 +152,21 @@ void do_jit_and_run_program_main(Compilation_Unit *unit) {
     auto code_section = &object.sections[text_sec_index];
     auto data_section = &object.sections[data_sec_index];
 
+    Array<dl_handle> dlls_to_search;
+
+    dlls_to_search.add(dl_open(nullptr));
+
+#ifndef _WIN32
     char *text_memory = (char *)mmap(nullptr, code_section->data.size(), PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT, -1, 0);
+#else
+    char *text_memory = (char *)VirtualAlloc(nullptr, code_section->data.size(), MEM_COMMIT, PAGE_READWRITE);
+    {
+        DWORD old_prot;
+        VirtualProtect(text_memory, code_section->data.size(), PAGE_EXECUTE_READWRITE, &old_prot);
+
+        dlls_to_search.add(dl_open("msvcrt.dll"));
+    }
+#endif
     char *data_memory = (char *)malloc(data_section->data.size());
 
     int written = 0;
@@ -140,8 +185,6 @@ void do_jit_and_run_program_main(Compilation_Unit *unit) {
     section_memory.add(data_memory);
     section_memory.add(text_memory);
 
-    void *process_handle = dlopen(nullptr, RTLD_LAZY);
-
     for (auto reloc : code_section->relocations) {
         bool rip = reloc.is_for_rip_call || reloc.is_rip_relative;
 
@@ -157,7 +200,12 @@ void do_jit_and_run_program_main(Compilation_Unit *unit) {
         auto symbol = &object.symbol_table[reloc.symbol_index];
 
         if (symbol->is_externally_defined) {
-            auto symbol_target = (char *)dlsym(process_handle, symbol->linkage_name.data);
+            char *symbol_target = nullptr;
+
+            for (auto handle : dlls_to_search) {
+                symbol_target = (char *)dl_sym(handle, symbol->linkage_name.data);
+                if (symbol_target) break;
+            }
             assert(symbol_target);
 
             if   (rip) *(u32 *)target = (u32)(symbol_target - target);
@@ -183,4 +231,3 @@ void do_jit_and_run_program_main(Compilation_Unit *unit) {
     void (*prog_main)() = (void (*)())(text_memory + main_symbol->section_offset);
     prog_main();
 }
-#endif
