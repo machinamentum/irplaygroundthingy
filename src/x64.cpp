@@ -541,7 +541,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 }
 
 Register make_reg(u8 machine_reg, bool is_free = true) {
-    Register reg = {0};
+    Register reg = {};
     reg.machine_reg = machine_reg;
     reg.is_free     = is_free;
     return reg;
