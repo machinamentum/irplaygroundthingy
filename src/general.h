@@ -26,12 +26,12 @@ const u32 U32_MAX = 0xFFFFFFFF;
 template <typename T>
 struct Array {
     T *data = nullptr;
-    size_t count    = 0;
-    size_t reserved = 0;
+    u32 count    = 0;
+    u32 reserved = 0;
 
-    static const size_t DEFAULT_ARRAY_RESERVE_SIZE = 16;
+    static const u32 DEFAULT_ARRAY_RESERVE_SIZE = 16;
 
-    void reserve(size_t amount) {
+    void reserve(u32 amount) {
         if (amount <= reserved) return;
         if (amount < DEFAULT_ARRAY_RESERVE_SIZE) amount = DEFAULT_ARRAY_RESERVE_SIZE;
 
@@ -39,7 +39,7 @@ struct Array {
         reserved = amount;
     }
 
-    void resize(size_t amount) {
+    void resize(u32 amount) {
         auto old_amount = count;
         reserve(amount);
         count = amount;
@@ -64,6 +64,7 @@ struct Array {
     }
 
     T &operator[](size_t index) {
+        assert(index <= U32_MAX);
         assert(index < count);
         return data[index];
     }
@@ -92,8 +93,8 @@ struct String {
 struct Data_Buffer {
     struct Chunk {
         u8 *data      = nullptr;
-        size_t count     = 0;
-        size_t reserved  = 0;
+        u32 count     = 0;
+        u32 reserved  = 0;
     };
 
     Array<Chunk> chunks;
@@ -102,7 +103,7 @@ struct Data_Buffer {
         new_chunk();
     }
 
-    Chunk *new_chunk(size_t size = 4096) {
+    Chunk *new_chunk(u32 size = 4096) {
         if (size < 4096) size = 4096;
         Chunk c;
         c.data     = (u8 *)malloc(size);
@@ -113,7 +114,7 @@ struct Data_Buffer {
         return &chunks[chunks.count-1];
     }
 
-    void append(void *src, size_t size) {
+    void append(void *src, u32 size) {
         Chunk *c = &chunks[chunks.count-1];
         if (c->count+size >= c->reserved) c = new_chunk(size);
 
@@ -121,7 +122,7 @@ struct Data_Buffer {
         c->count += size;
     }
 
-    void *allocate(size_t size) {
+    void *allocate(u32 size) {
         Chunk *c = &chunks[chunks.count-1];
         if (c->count+size >= c->reserved) c = new_chunk(size);
 
@@ -140,8 +141,8 @@ struct Data_Buffer {
         append(&byte, 1);
     }
 
-    size_t size() {
-        size_t size = 0;
+    u32 size() {
+        u32 size = 0;
         for (auto &c : chunks) {
             size += c.count;
         }

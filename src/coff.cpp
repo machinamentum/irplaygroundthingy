@@ -85,9 +85,7 @@ void emit_coff_file(Linker_Object *object) {
     header->NumberOfSections     = static_cast<u16>(object->sections.count);
     header->TimeDateStamp        = 0; // @TODO
     // header->PointerToSymbolTable = ;
-
-    assert(object->symbol_table.count <= U32_MAX);
-    header->NumberOfSymbols      = static_cast<u32>(object->symbol_table.count);
+    header->NumberOfSymbols      = object->symbol_table.count;
     header->SizeOfOptionalHeader = 0;
     header->Characteristics      = 0;
 
@@ -100,8 +98,7 @@ void emit_coff_file(Linker_Object *object) {
 
         memcpy(section->Name, sect.name.data, sect.name.length);
 
-        assert(sect.data.size() <= U32_MAX);
-        u32 data_size = static_cast<u32>(sect.data.size());
+        u32 data_size = sect.data.size();
         section->VirtualSize    = data_size;
         section->VirtualAddress = 0;
         section->SizeOfRawData  = data_size;
@@ -128,19 +125,16 @@ void emit_coff_file(Linker_Object *object) {
     for (auto &sect : object->sections) {
         PE_Coff_Section_Header *section = (PE_Coff_Section_Header *)sect.mach_section;
 
-        assert(buffer.size() <= U32_MAX);
-        section->PointerToRawData = static_cast<u32>(buffer.size());
+        section->PointerToRawData = buffer.size();
 
         buffer.append(&sect.data);
 
-        assert(buffer.size() <= U32_MAX);
-        section->PointerToRelocations = static_cast<u32>(buffer.size());
+        section->PointerToRelocations = buffer.size();
 
         if (section->Characteristics & IMAGE_SCN_LNK_NRELOC_OVFL) {
             PE_Coff_Relocation *info = (PE_Coff_Relocation *)buffer.allocate(PE_COFF_RELOCATION_SIZE);
 
-            assert(sect.relocations.count <= U32_MAX);
-            info->VirtualAddress   = static_cast<u32>(sect.relocations.count);
+            info->VirtualAddress   = sect.relocations.count;
             info->SymbolTableIndex = 0;
             info->Type             = 0;
         }
@@ -162,8 +156,7 @@ void emit_coff_file(Linker_Object *object) {
     Data_Buffer string_buffer;
     string_buffer.append_byte(0);
 
-    assert(buffer.size() <= U32_MAX);
-    header->PointerToSymbolTable = static_cast<u32>(buffer.size());
+    header->PointerToSymbolTable = buffer.size();
 
     for (auto &symbol : object->symbol_table) {
         PE_Coff_Symbol *sym = (PE_Coff_Symbol *)buffer.allocate(PE_COFF_SYMBOL_SIZE);
@@ -173,8 +166,10 @@ void emit_coff_file(Linker_Object *object) {
             memcpy(sym->Name.ShortName, symbol.linkage_name.data, symbol.linkage_name.length);
         } else {
             sym->Name.LongName.Zeroes = 0;
-            sym->Name.LongName.Offset = static_cast<u32>(string_buffer.size());
-            string_buffer.append(symbol.linkage_name.data, symbol.linkage_name.length);
+            sym->Name.LongName.Offset = string_buffer.size();
+
+            assert(symbol.linkage_name.length <= U32_MAX);
+            string_buffer.append(symbol.linkage_name.data, static_cast<u32>(symbol.linkage_name.length));
         }
 
         sym->SectionNumber = symbol.section_number;
@@ -188,13 +183,11 @@ void emit_coff_file(Linker_Object *object) {
 
         sym->StorageClass       = 2;
         sym->NumberOfAuxSymbols = 0;
-
-        // printf("");
     }
 
     assert(string_buffer.size() <= (U32_MAX-4));
     u32 *string_table_size = (u32 *)buffer.allocate(4);
-    *string_table_size = static_cast<u32>(string_buffer.size()) + 4; // +4 to include the string_table_size field itself.
+    *string_table_size = string_buffer.size() + 4; // +4 to include the string_table_size field itself.
 
     buffer.append(&string_buffer);
 

@@ -144,8 +144,8 @@ void gen_bf_instruction(Function *function, Basic_Block *block, Value *data_buff
 void old_test();
 
 int main(int argc, char **argv) {
-    old_test();
-    return 0;
+    // old_test();
+    // return 0;
 
     Compilation_Unit unit;
     unit.target = get_host_target();
@@ -189,8 +189,8 @@ int main(int argc, char **argv) {
 
     main_func->blocks[main_func->blocks.count-1]->instructions.add(new Instruction_Return());
 
-    emit_obj_file(&unit);
-    // do_jit_and_run_program_main(&unit);
+    // emit_obj_file(&unit);
+    do_jit_and_run_program_main(&unit);
     return 0;
 }
 

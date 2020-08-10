@@ -107,7 +107,7 @@ struct Register {
 
 struct Instruction : Value {
     Register *result_stored_in    = nullptr;
-    u32 result_spilled_onto_stack = 0xFFFFFFFF;
+    s32 result_spilled_onto_stack = 0;
 };
 
 struct Instruction_Call : Instruction {
@@ -128,7 +128,7 @@ struct Instruction_Alloca : Instruction {
 
     Type *alloca_type = nullptr;
     u32 array_size   = 1;
-    u64 stack_offset = 0;
+    s32 stack_offset = 0;
 };
 
 struct Instruction_Store : Instruction {
@@ -291,7 +291,7 @@ struct Function : Global_Value {
 
 
     Array<u32 *>    stack_size_fixups;
-    u32 stack_size = 0;
+    s32 stack_size = 0;
 };
 
 struct Compilation_Unit {

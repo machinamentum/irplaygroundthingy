@@ -234,7 +234,9 @@ void emit_macho_file(Linker_Object *object) {
         if (symbol.linkage_name.length) {
             sym->n_strx = string_buffer.size();
             if (!symbol.is_section) string_buffer.append_byte('_');
-            string_buffer.append(symbol.linkage_name.data, symbol.linkage_name.length);
+
+            assert(symbol.linkage_name.length <= U32_MAX);
+            string_buffer.append(symbol.linkage_name.data, static_cast<u32>(symbol.linkage_name.length));
             string_buffer.append_byte(0);
         } else {
             sym->n_strx = 0;
@@ -264,9 +266,9 @@ void emit_macho_file(Linker_Object *object) {
 
     FILE *file = fopen("test.o", "wb");
     for (auto &c : buffer.chunks) {
-        int amount = c.count;
+        size_t amount = c.count;
         do {
-            int written = fwrite(c.data, 1, amount, file);
+            size_t written = fwrite(c.data, 1, amount, file);
             amount -= written;
         } while (amount > 0);
     }
