@@ -412,10 +412,10 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 if (result != param_reg) move_reg64_to_reg64(&code_section->data, result, param_reg);
             }
 
-            if (object->target.is_system_v()) {
-                // Spill RAX
-                maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
+            // Spill RAX
+            function->claim_register(&code_section->data, RAX, inst);
 
+            if (object->target.is_system_v()) {
                 // load number of floating point parameters into %al
                 code_section->data.append_byte(REX(1, 0, 0, 0));
                 code_section->data.append_byte(0xB8 + RAX);

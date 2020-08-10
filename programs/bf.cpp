@@ -74,14 +74,17 @@ void gen_bf_instruction(Function *function, Basic_Block *block, Value *data_buff
                 auto load_value = make_load(gep);
                 block->instructions.add(load_value);
 
-                Instruction_Call *call = new Instruction_Call();
-                call->call_target = putchar_func;
+                Instruction_Call *call = make_call(putchar_func); // @Temporary int type
                 call->parameters.add(load_value);
                 block->instructions.add(call);
                 break;
             }
 
             case ',': {
+                Instruction_Call *call = make_call(getchar_func);
+                block->instructions.add(call);
+
+                block->instructions.add(make_store(call, gep));
                 break;
             }
 
@@ -154,12 +157,15 @@ int main(int argc, char **argv) {
 
     Function *putchar_func = new Function();
     putchar_func->name = "putchar";
+    putchar_func->value_type = make_func_type(make_void_type());
 
     Function *getchar_func = new Function();
     getchar_func->name = "getchar";
+    getchar_func->value_type = make_func_type(make_integer_type(1));
 
     Function *memset_func = new Function();
     memset_func->name  = "memset";
+    memset_func->value_type = make_func_type(make_void_type());
 
     Function *main_func = new Function();
     main_func->name = "main";
@@ -175,8 +181,7 @@ int main(int argc, char **argv) {
     Instruction_Alloca *data_buffer_alloca = make_alloca(make_integer_type(1), 30000);
     block->instructions.add(data_buffer_alloca);
 
-    Instruction_Call *call = new Instruction_Call();
-    call->call_target = memset_func;
+    Instruction_Call *call = make_call(memset_func);
     call->parameters.add(data_buffer_alloca);
     call->parameters.add(make_integer_constant(0));
     call->parameters.add(make_integer_constant(30000));
@@ -185,7 +190,7 @@ int main(int argc, char **argv) {
     Instruction_Alloca *index_alloca = make_alloca(make_integer_type(8), 1);
     block->instructions.add(index_alloca);
 
-    block->instructions.add(make_store(make_integer_constant(0), index_alloca));
+    block->instructions.add(make_store(make_integer_constant(1000), index_alloca));
 
     gen_bf_instruction(main_func, block, data_buffer_alloca, index_alloca, putchar_func, getchar_func);
 

@@ -25,6 +25,7 @@ enum {
 
 struct Type {
     enum {
+        VOID,
         INTEGER,
         FLOAT,
         POINTER,
@@ -37,8 +38,26 @@ struct Type {
 
     union {
         Type *pointer_to;
+
+        Type *result_type;
     };
 };
+
+inline
+Type *make_void_type() {
+    Type *type = new Type();
+    type->type = Type::VOID;
+    return type;
+}
+
+// @TODO parameter types.
+inline
+Type *make_func_type(Type *result_type) {
+    Type *type = new Type();
+    type->type = Type::FUNCTION;
+    type->result_type = result_type;
+    return type;
+}
 
 inline
 Type *make_integer_type(u32 size) {
@@ -299,5 +318,14 @@ struct Compilation_Unit {
     Array<Function *> functions;
 };
 
+// @TODO parameter types
+inline
+Instruction_Call *make_call(Function *func) {
+    assert(func->value_type && func->value_type->type == Type::FUNCTION);
+    Instruction_Call *call = new Instruction_Call();
+    call->call_target = func;
+    call->value_type = func->value_type->result_type;
+    return call;
+}
 
 #endif

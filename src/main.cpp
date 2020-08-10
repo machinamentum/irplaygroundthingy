@@ -15,6 +15,7 @@ void old_test() {
 
     Function *printf_func = new Function();
     printf_func->name = "printf";
+    printf_func->value_type = make_func_type(make_void_type());
 
     Function *main_func = new Function();
     main_func->name = "main";
@@ -48,8 +49,7 @@ void old_test() {
 
         loop_header->instructions.add(make_branch(load, loop_body, loop_exit));
 
-        Instruction_Call *call = new Instruction_Call();
-        call->call_target = printf_func;
+        Instruction_Call *call = make_call(printf_func);
         call->parameters.add(make_string_constant("Hello World: %d\n"));
         call->parameters.add(load);
 
