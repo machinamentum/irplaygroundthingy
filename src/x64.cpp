@@ -401,7 +401,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
                 for (auto &reg : function->register_usage) {
                     if (reg.machine_reg == param_reg) {
-                        maybe_spill_register(function, &code_section->data, &function->register_usage[reg.machine_reg]);
+                        maybe_spill_register(function, &code_section->data, &reg);
                         reg.is_free = false;
                         break;
                     }
@@ -476,12 +476,11 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
 
             // :WastefulPushPops:
-            pop_reg64(&code_section->data, RSI);
-            pop_reg64(&code_section->data, RCX);
-            pop_reg64(&code_section->data, RDX);
-            pop_reg64(&code_section->data, RBX);
-            pop_reg64(&code_section->data, RAX);
-            pop_reg64(&code_section->data, RDI);
+            // pop in reverse order
+            for (size_t i = function->register_usage.count; i > 0; --i) {
+                auto &reg = function->register_usage[i-1];
+                pop_reg64(&code_section->data, reg.machine_reg);
+            }
             
 
             pop_reg64(&code_section->data, RBP);
@@ -541,6 +540,13 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
     return 0;
 }
 
+Register make_reg(u8 machine_reg, bool is_free = true) {
+    Register reg = {0};
+    reg.machine_reg = machine_reg;
+    reg.is_free     = is_free;
+    return reg;
+}
+
 void emit_function(Linker_Object *object, Section *code_section, Section *data_section, Function *function) {
     u32 symbol_index = get_symbol_index(object, function);
     Symbol *sym = &object->symbol_table[symbol_index];
@@ -551,26 +557,25 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
     if (!sym->is_externally_defined) sym->section_number = code_section->section_number;
     sym->section_offset = code_section->data.size();
 
-    function->register_usage.resize(RBX+1);
-
-    u8 count = RAX;
-    for (auto &reg : function->register_usage) {
-        reg.machine_reg = count;
-        reg.is_free = true;
-
-        ++count;
-    }
+    function->register_usage.add(make_reg(RAX));
+    function->register_usage.add(make_reg(RCX));
+    function->register_usage.add(make_reg(RDX));
+    function->register_usage.add(make_reg(RBX));
+    function->register_usage.add(make_reg(RSP, false));
+    function->register_usage.add(make_reg(RBP, false));
+    function->register_usage.add(make_reg(RSI));
+    function->register_usage.add(make_reg(RDI));
+    function->register_usage.add(make_reg(R8));
+    function->register_usage.add(make_reg(R9));
+    
 
     push_reg64(&code_section->data, RBP);
 
     // :WastefulPushPops: @Cleanup pushing all the registers we may need is
     // a bit excessive and wasteful.
-    push_reg64(&code_section->data, RDI);
-    push_reg64(&code_section->data, RAX);
-    push_reg64(&code_section->data, RBX);
-    push_reg64(&code_section->data, RDX);
-    push_reg64(&code_section->data, RCX);
-    push_reg64(&code_section->data, RSI);
+   for (auto reg : function->register_usage) {
+        push_reg64(&code_section->data, reg.machine_reg);
+   }
     
     move_reg64_to_reg64(&code_section->data, RSP, RBP);
 
