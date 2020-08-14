@@ -15,7 +15,7 @@ const u8 R9  = 9;
 
 // This magic is best explained on OSDev https://wiki.osdev.org/X86-64_Instruction_Encoding
 // REX prefixes the instruction, ModRM seems to post-fix the instruction but before data operands,
-// and both seem to be optional... and the processor magically understands these things and parsers
+// and both seem to be optional... and the processor magically understands these things and parses
 // instructions correctly ????
 #define REX(W, R, X, B) ((u8)(0x40 | ((W) << 3) | ((R) << 2) | ((X) << 1) | (B)))
 #define ModRM(mod, reg, rm) ((u8)(((mod) << 6) | ((reg) << 3) | (rm)))
@@ -24,39 +24,46 @@ const u8 R9  = 9;
 #define BIT3(v) ((v & (1 << 3)) >> 3)
 #define LOW3(v) (v & 0x7)
 
+void _single_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 reg, u8 size) {
+    assert(size >= 2);
+
+    if (size == 2) dataptr->append_byte(0x66);
+    if (size >= 2) dataptr->append_byte(REX((size == 8) ? 1 : 0, 0, 0, BIT3(reg)));
+
+    dataptr->append_byte(opcode + LOW3(reg));
+}
+
+void _two_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 mod, u8 operand1, u8 operand2, u32 size) {
+    if (size == 2) dataptr->append_byte(0x66);
+    if (size >= 2) dataptr->append_byte(REX((size == 8) ? 1 : 0, BIT3(operand1), 0, BIT3(operand2)));
+
+    dataptr->append_byte(opcode);
+    dataptr->append_byte(ModRM(mod, LOW3(operand1), LOW3(operand2)));
+}
+
+void _move_bidrectional(Data_Buffer *dataptr, u8 value_reg, u8 ptrbase, s32 disp, u32 size, bool to_memory) {
+    u8 op = (size == 1) ? 0x88 : 0x89;
+    if (!to_memory) op += 0x02;
+
+    _two_register_operand_instruction(dataptr, op, 0x2, value_reg, ptrbase, size);
+    s32 *value = (s32  *)dataptr->allocate(4);
+    *value = disp;
+}
+
 void move_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst) {
-    dataptr->append_byte(REX(1, BIT3(dst), 0, BIT3(src)));
-    dataptr->append_byte(0x8B);
-    dataptr->append_byte(ModRM(0x3, LOW3(dst), LOW3(src)));
+    _two_register_operand_instruction(dataptr, 0x8B, 0x3, dst, src, 8);
 }
 
 void move_reg_to_memory(Data_Buffer *dataptr, u8 src, u8 dst, s32 disp, u32 size) {
-    u8 op = 0x89;
-    if (size == 1) op = 0x88;
-    if (size == 2) dataptr->append_byte(0x66);
-    if (size >= 2) dataptr->append_byte(REX((size == 8) ? 1 : 0, BIT3(src), 0, BIT3(dst)));
-
-    dataptr->append_byte(op);
-    dataptr->append_byte(ModRM(0x2, LOW3(src), LOW3(dst)));
-    s32 *value = (s32  *)dataptr->allocate(4);
-    *value = disp;
+    _move_bidrectional(dataptr, src, dst, disp, size, true);
 }
 
 void move_memory_to_reg(Data_Buffer *dataptr, u8 dst, u8 src, s32 disp, u32 size) {
-    u8 op = 0x8B;
-    if (size == 1) op = 0x8A;
-    if (size == 2) dataptr->append_byte(0x66);
-    if (size >= 2) dataptr->append_byte(REX((size == 8) ? 1 : 0, BIT3(dst), 0, BIT3(src)));
-
-    dataptr->append_byte(op);
-    dataptr->append_byte(ModRM(0x2, LOW3(dst), LOW3(src)));
-    s32 *value = (s32  *)dataptr->allocate(4);
-    *value = disp;
+    _move_bidrectional(dataptr, dst, src, disp, size, false);
 }
 
 u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 imm, u8 reg) {
-    dataptr->append_byte(REX(1, 0, 0, 0));
-    dataptr->append_byte(0xB8 + reg);
+    _single_register_operand_instruction(dataptr, 0xB8, reg, 8);
     u64 *value = (u64 *)dataptr->allocate(8);
     *value = imm;
 
@@ -65,37 +72,27 @@ u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 imm, u8 reg) {
 
 // Need to allocate 4 bytes of space after this call
 void lea_rip_relative_into_reg64(Data_Buffer *dataptr, u8 reg) {
-    dataptr->append_byte(REX(1, BIT3(reg), 0, 0));
-    dataptr->append_byte(0x8D);
-    dataptr->append_byte(ModRM(0x0, LOW3(reg), 0x5));
+    _two_register_operand_instruction(dataptr, 0x8D, 0, reg, 0x5, 8);
 }
 
 void lea_into_reg64(Data_Buffer *dataptr, u8 dst, u8 src, s32 disp) {
-    dataptr->append_byte(REX(1, BIT3(dst), 0, BIT3(src)));
-    dataptr->append_byte(0x8D);
-    dataptr->append_byte(ModRM(0x2, LOW3(dst), LOW3(src)));
+    _two_register_operand_instruction(dataptr, 0x8D, 0x2, dst, src, 8);
+
     s32 *value = (s32  *)dataptr->allocate(4);
     *value = disp;
 }
 
-void pop_reg64(Data_Buffer *dataptr, u8 reg) {
-    dataptr->append_byte(REX(1, 0, 0, BIT3(reg)));
-    dataptr->append_byte(0x58 + LOW3(reg));
+void pop_reg64(Data_Buffer *dataptr, u8 reg, u8 size = 8) {
+    _single_register_operand_instruction(dataptr, 0x58, reg, size);
 }
 
-void push_reg64(Data_Buffer *dataptr, u8 reg) {
-    dataptr->append_byte(REX(1, 0, 0, BIT3(reg)));
-    dataptr->append_byte(0x50 + LOW3(reg));
+void push_reg64(Data_Buffer *dataptr, u8 reg, u8 size = 8) {
+    _single_register_operand_instruction(dataptr, 0x50, reg, size);
 }
 
-u32 *sub_imm32_from_reg64(Data_Buffer *dataptr, u8 reg, u32 value, u32 size) {
-    u8 op = 0x81;
-    if (size == 1) op = 0x80;
-    if (size == 2) dataptr->append_byte(0x66);
-    if (size >= 2) dataptr->append_byte(REX((size == 8) ? 1 : 0, 0, 0, 0));
-
-    dataptr->append_byte(op);
-    dataptr->append_byte(ModRM(0x3, 5,  LOW3(reg)));
+u32 *_mathop_imm32_reg64(Data_Buffer *dataptr, u8 reg, u32 value, u32 size, u8 op_select) {
+    u8 op = (size == 1) ? 0x80 : 0x81;
+    _two_register_operand_instruction(dataptr, op, 0x3, op_select, reg, 8);
 
     if (size > 4) size = 4;
     u8 *operand = (u8 *)dataptr->allocate(size);
@@ -107,33 +104,26 @@ u32 *sub_imm32_from_reg64(Data_Buffer *dataptr, u8 reg, u32 value, u32 size) {
     return (u32 *)operand;
 }
 
-u32 *add_imm32_to_reg64(Data_Buffer *dataptr, u8 reg, u32 value) {
-    dataptr->append_byte(REX(1, 0, 0, 0));
-    dataptr->append_byte(0x81);
-    dataptr->append_byte(ModRM(0x3, 0,  LOW3(reg)));
-    u32 *operand = (u32 *)dataptr->allocate(4);
-    *operand = value;
+const u8 MATH_OP_SELECT_SUB = 5;
+const u8 MATH_OP_SELECT_ADD = 0;
 
-    return operand;
+u32 *sub_imm32_from_reg64(Data_Buffer *dataptr, u8 reg, u32 value, u32 size) {
+    return _mathop_imm32_reg64(dataptr, reg, value, size, MATH_OP_SELECT_SUB);
+}
+
+u32 *add_imm32_to_reg64(Data_Buffer *dataptr, u8 reg, u32 value, u32 size) {
+    return _mathop_imm32_reg64(dataptr, reg, value, size, MATH_OP_SELECT_ADD);
 }
 
 void add_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
-    u8 op = 0x01;
-    if (size == 1) op = 0x00;
-    if (size == 2) dataptr->append_byte(0x66);
-    if (size >= 2) dataptr->append_byte(REX((size == 8) ? 1 : 0, BIT3(src), 0, BIT3(dst)));
-    dataptr->append_byte(op);
-    dataptr->append_byte(ModRM(0x3, LOW3(src),  LOW3(dst)));
+    u8 op = (size == 1) ? 0x00 : 0x01;
+    _two_register_operand_instruction(dataptr, op, 0x3, src, dst, size);
+
 }
 
 void sub_reg64_from_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
-    u8 op = 0x29;
-    if (size == 1) op = 0x28;
-    if (size == 2) dataptr->append_byte(0x66);
-    if (size >= 2) dataptr->append_byte(REX((size == 8) ? 1 : 0, BIT3(src), 0, BIT3(dst)));
-
-    dataptr->append_byte(op);
-    dataptr->append_byte(ModRM(0x3, LOW3(src),  LOW3(dst)));
+    u8 op = (size == 1) ? 0x28 : 0x29;
+    _two_register_operand_instruction(dataptr, op, 0x3, src, dst, size);
 }
 
 void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
@@ -464,14 +454,14 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             }
 
             if (object->target.is_win32()) {
-                add_imm32_to_reg64(&code_section->data, RSP, 32);
+                add_imm32_to_reg64(&code_section->data, RSP, 32, 8);
             }
 
             return RAX;
         }
 
         case INSTRUCTION_RETURN: {
-            u32 *stack_size_target = add_imm32_to_reg64(&code_section->data, RSP, 0);
+            u32 *stack_size_target = add_imm32_to_reg64(&code_section->data, RSP, 0, 8);
             function->stack_size_fixups.add(stack_size_target);
 
 
