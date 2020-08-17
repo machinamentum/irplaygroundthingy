@@ -173,18 +173,19 @@ u8 get_next_win64_abi_register(u8 *index) {
     }
 }
 
-u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction *inst) {
+Register *get_free_or_suggested_register(Function *function, Data_Buffer *dataptr, u8 suggested_register, Instruction *inst) {
+    Register *reg = function->get_free_register();
+    if (!reg) reg = &function->register_usage[suggested_register];
+    
+    if (inst) return function->claim_register(dataptr, reg->machine_reg, inst);
+    return reg;
+}
+
+u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction *inst, u8 suggested_register) {
     if (auto reg = inst->result_stored_in) {
         return reg->machine_reg;
     } else {
-        reg = function->get_free_register();
-        if (!reg) {
-            reg = &function->register_usage[RAX];
-            maybe_spill_register(function, dataptr, reg);
-            reg->is_free = false;
-        }
-
-        function->claim_register(dataptr, reg->machine_reg, inst);
+        reg = get_free_or_suggested_register(function, dataptr, suggested_register, inst);
 
         assert(inst->result_spilled_onto_stack != 0);
         move_memory_to_reg(dataptr, reg->machine_reg, RBP, -inst->result_spilled_onto_stack, inst->value_type->size);
@@ -193,16 +194,12 @@ u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction
 }
 
 
-u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_section, Section *data_section, Value *value) {
+u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_section, Section *data_section, Value *value, u8 suggested_register = RAX) {
     if (value->type == VALUE_CONSTANT) {
         auto constant = static_cast<Constant *>(value);
 
-        Register *reg = function->get_free_register();
-        if (!reg) {
-            reg = &function->register_usage[RAX];
-            maybe_spill_register(function, &code_section->data, reg);
-            reg->is_free = false;
-        }
+        Register *reg = get_free_or_suggested_register(function, &code_section->data, suggested_register, nullptr);
+        reg->is_free = false;
 
         if (constant->constant_type == Constant::STRING) {
             auto data_sec_offset = data_section->data.size();
@@ -257,12 +254,8 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
     } else if (value->type == VALUE_BASIC_BLOCK) {
         Basic_Block *block = static_cast<Basic_Block *>(value);
 
-        Register *reg = function->get_free_register();
-        if (!reg) {
-            reg = &function->register_usage[RAX];
-            maybe_spill_register(function, &code_section->data, reg);
-            reg->is_free = false;
-        }
+        Register *reg = get_free_or_suggested_register(function, &code_section->data, suggested_register, nullptr);
+        reg->is_free = false;
 
         lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
 
@@ -274,7 +267,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
         return reg->machine_reg;
     } else if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) {
         auto inst = static_cast<Instruction *>(value);
-        return load_instruction_result(function, &code_section->data, inst);
+        return load_instruction_result(function, &code_section->data, inst, suggested_register);
     }
 
     assert(false);
@@ -288,14 +281,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
         case INSTRUCTION_ALLOCA: {
             auto _alloca = static_cast<Instruction_Alloca *>(inst);
 
-            Register *reg = function->get_free_register();
-            if (!reg) {
-                reg = &function->register_usage[RAX];
-                maybe_spill_register(function, &code_section->data, reg);
-                reg->is_free = false;
-            }
-
-            function->claim_register(&code_section->data, reg->machine_reg, _alloca);
+            Register *reg = get_free_or_suggested_register(function, &code_section->data, RAX, inst);
 
             assert(_alloca->stack_offset != 0);
             lea_into_reg64(&code_section->data, reg->machine_reg, RBP, -_alloca->stack_offset);
@@ -309,7 +295,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
             maybe_spill_register(function, &code_section->data, &function->register_usage[RCX]);
 
-            u8 target = emit_load_of_value(object, function, code_section, data_section, store->store_target);
+            u8 target = emit_load_of_value(object, function, code_section, data_section, store->store_target, RAX);
             u8 source = emit_load_of_value(object, function, code_section, data_section, store->source_value);
 
             move_reg_to_memory(&code_section->data, source, target, 0, (u8) store->store_target->value_type->pointer_to->size);
@@ -321,8 +307,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             u8 source = emit_load_of_value(object, function, code_section, data_section, load->pointer_value);
 
-            Register *reg = &function->register_usage[source];
-            function->claim_register(&code_section->data, reg->machine_reg, inst);
+            Register *reg = function->claim_register(&code_section->data, source, inst);
 
             move_memory_to_reg(&code_section->data, reg->machine_reg, source, 0, load->value_type->size);
             return reg->machine_reg;
@@ -338,10 +323,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             u8 source = emit_load_of_value(object, function, code_section, data_section, gep->pointer_value);
             u8 target = emit_load_of_value(object, function, code_section, data_section, gep->index);
 
-            Register *reg = &function->register_usage[target];
-            maybe_spill_register(function, &code_section->data, reg);
-            function->claim_register(&code_section->data, reg->machine_reg, inst);
-            reg->is_free = false;
+            Register *reg = function->claim_register(&code_section->data, target, inst);
 
             add_reg64_to_reg64(&code_section->data, source, reg->machine_reg, gep->value_type->size);
             return reg->machine_reg;
@@ -358,11 +340,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             u8 lhs_reg = emit_load_of_value(object, function, code_section, data_section, add->lhs);
             u8 rhs_reg = emit_load_of_value(object, function, code_section, data_section, add->rhs);
 
-            Register *reg = &function->register_usage[lhs_reg];
-            maybe_spill_register(function, &code_section->data, reg);
-            reg->is_free = false;
-
-            function->claim_register(&code_section->data, reg->machine_reg, inst);
+            Register *reg = function->claim_register(&code_section->data, lhs_reg, inst);
 
             if      (inst->type == INSTRUCTION_ADD) add_reg64_to_reg64(&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
             else if (inst->type == INSTRUCTION_SUB) sub_reg64_from_reg64(&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
