@@ -95,7 +95,14 @@ struct Constant : Value {
 
     String string_value;
     u64 integer_value;
+
+    bool is_integer() { return constant_type == INTEGER; }
 };
+
+inline
+Constant *is_constant(Value *value) {
+    return (value->type == VALUE_CONSTANT) ? static_cast<Constant *>(value) : nullptr;
+}
 
 inline
 Constant *make_string_constant(String value) {

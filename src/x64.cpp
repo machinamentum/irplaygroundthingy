@@ -28,15 +28,16 @@ void _single_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 re
     assert(size >= 2);
 
     if (size == 2) dataptr->append_byte(0x66);
-    if (size >= 2) dataptr->append_byte(REX((size == 8) ? 1 : 0, 0, 0, BIT3(reg)));
+    dataptr->append_byte(REX((size == 8) ? 1 : 0, 0, 0, BIT3(reg)));
 
     dataptr->append_byte(opcode + LOW3(reg));
 }
 
-void _two_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 mod, u8 operand1, u8 operand2, u32 size) {
+void _two_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 mod, u8 operand1, u8 operand2, u32 size, bool _0F_op = false) {
     if (size == 2) dataptr->append_byte(0x66);
-    if (size >= 2) dataptr->append_byte(REX((size == 8) ? 1 : 0, BIT3(operand1), 0, BIT3(operand2)));
+    dataptr->append_byte(REX((size == 8) ? 1 : 0, BIT3(operand1), 0, BIT3(operand2)));
 
+    if (_0F_op) dataptr->append_byte(0x0F);
     dataptr->append_byte(opcode);
     dataptr->append_byte(ModRM(mod, LOW3(operand1), LOW3(operand2)));
 }
@@ -70,6 +71,34 @@ u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 imm, u8 reg) {
     return value;
 }
 
+void move_imm32_to_memory(Data_Buffer *dataptr, u32 value, u8 dst, s32 disp, u32 size) {
+    u8 op = (size == 1) ? 0xC6 : 0xC7;
+    _two_register_operand_instruction(dataptr, op, 0x2, RAX, dst, size);
+    s32 *offset = (s32 *)dataptr->allocate(4);
+    *offset = disp;
+
+
+    if (size > 4) size = 4;
+    u8 *operand = (u8 *)dataptr->allocate(size);
+    
+    if (size == 1) *       operand = static_cast<u8> (value);
+    if (size == 2) *(u16 *)operand = static_cast<u16>(value);
+    if (size == 4 || size == 8) *(u32 *)operand = value;
+}
+
+void move_memory_to_reg_zero_ext(Data_Buffer *dataptr, u8 value_reg, u8 ptrbase, s32 disp, u32 size) {
+    if (size <= 2) {
+        u8 op = (size == 1) ? 0xB6 : 0xB7;
+
+        size = 4; // always load into 32-bit register
+        _two_register_operand_instruction(dataptr, op, 0x2, value_reg, ptrbase, size, true);
+        s32 *value = (s32  *)dataptr->allocate(4);
+        *value = disp;
+    } else {
+        move_memory_to_reg(dataptr, value_reg, ptrbase, disp, size);
+    }
+}
+
 // Need to allocate 4 bytes of space after this call
 void lea_rip_relative_into_reg64(Data_Buffer *dataptr, u8 reg) {
     _two_register_operand_instruction(dataptr, 0x8D, 0, reg, 0x5, 8);
@@ -92,7 +121,7 @@ void push_reg64(Data_Buffer *dataptr, u8 reg, u8 size = 8) {
 
 u32 *_mathop_imm32_reg64(Data_Buffer *dataptr, u8 reg, u32 value, u32 size, u8 op_select) {
     u8 op = (size == 1) ? 0x80 : 0x81;
-    _two_register_operand_instruction(dataptr, op, 0x3, op_select, reg, 8);
+    _two_register_operand_instruction(dataptr, op, 0x3, op_select, reg, size);
 
     if (size > 4) size = 4;
     u8 *operand = (u8 *)dataptr->allocate(size);
@@ -115,10 +144,23 @@ u32 *add_imm32_to_reg64(Data_Buffer *dataptr, u8 reg, u32 value, u32 size) {
     return _mathop_imm32_reg64(dataptr, reg, value, size, MATH_OP_SELECT_ADD);
 }
 
+void imul_reg64_with_imm32(Data_Buffer *dataptr, u8 reg, u32 value, u32 size) {
+    assert(size == 4 || size == 8);
+
+    u8 op = 0x69;
+    _two_register_operand_instruction(dataptr, op, 0x3, reg, reg, size);
+
+    if (size > 4) size = 4;
+    u8 *operand = (u8 *)dataptr->allocate(size);
+    
+    if (size == 1) *       operand = static_cast<u8> (value);
+    if (size == 2) *(u16 *)operand = static_cast<u16>(value);
+    if (size == 4 || size == 8) *(u32 *)operand = value;
+}
+
 void add_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     u8 op = (size == 1) ? 0x00 : 0x01;
     _two_register_operand_instruction(dataptr, op, 0x3, src, dst, size);
-
 }
 
 void sub_reg64_from_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
@@ -177,18 +219,22 @@ Register *get_free_or_suggested_register(Function *function, Data_Buffer *datapt
     Register *reg = function->get_free_register();
     if (!reg) reg = &function->register_usage[suggested_register];
     
+    maybe_spill_register(function, dataptr, reg);
     if (inst) return function->claim_register(dataptr, reg->machine_reg, inst);
+
+    
     return reg;
 }
 
 u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction *inst, u8 suggested_register) {
     if (auto reg = inst->result_stored_in) {
+        assert(reg->currently_holding_result_of_instruction == inst);
         return reg->machine_reg;
     } else {
         reg = get_free_or_suggested_register(function, dataptr, suggested_register, inst);
 
         assert(inst->result_spilled_onto_stack != 0);
-        move_memory_to_reg(dataptr, reg->machine_reg, RBP, -inst->result_spilled_onto_stack, inst->value_type->size);
+        move_memory_to_reg_zero_ext(dataptr, reg->machine_reg, RBP, -inst->result_spilled_onto_stack, inst->value_type->size);
         return reg->machine_reg;
     }
 }
@@ -274,7 +320,31 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
     return 0;
 }
 
-#include <stdio.h>
+struct Address_Info {
+    u8 machine_reg;
+    s32 disp;
+};
+
+Address_Info get_address_value_of_pointer(Linker_Object *object, Function *function, Section *code_section, Section *data_section, Value *value, u8 suggested_register = RAX) {
+    assert(value->value_type->type == Type::POINTER);
+
+    if (value->type == INSTRUCTION_ALLOCA) {
+        auto _alloca = static_cast<Instruction_Alloca *>(value);
+        return { RBP, -_alloca->stack_offset };
+    } else {
+        Address_Info info;
+        info.machine_reg = emit_load_of_value(object, function, code_section, data_section, value, suggested_register);
+        info.disp = 0;
+        return info;
+    }
+}
+
+bool is_in_register(Value *value) {
+    if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) {
+        auto inst = static_cast<Instruction *>(value);
+        return inst->result_stored_in != nullptr;
+    }
+}
 
 u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *current_block, Section *code_section, Section *data_section, Instruction *inst) {
     switch (inst->type) {
@@ -295,10 +365,21 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
             maybe_spill_register(function, &code_section->data, &function->register_usage[RCX]);
 
-            u8 target = emit_load_of_value(object, function, code_section, data_section, store->store_target, RAX);
-            u8 source = emit_load_of_value(object, function, code_section, data_section, store->source_value);
+            Address_Info target_info = get_address_value_of_pointer(object, function, code_section, data_section, store->store_target, RAX);
 
-            move_reg_to_memory(&code_section->data, source, target, 0, (u8) store->store_target->value_type->pointer_to->size);
+            Constant *constant = is_constant(store->source_value);
+            if (constant && constant->is_integer()) {
+                move_imm32_to_memory(&code_section->data, constant->integer_value, target_info.machine_reg, target_info.disp, store->store_target->value_type->pointer_to->size);
+            } else {
+                u8 second = RCX;
+                if (target_info.machine_reg == second) second = RAX;
+
+                u8 source = emit_load_of_value(object, function, code_section, data_section, store->source_value, second);
+
+                assert(target_info.machine_reg != source);
+
+                move_reg_to_memory(&code_section->data, source, target_info.machine_reg, target_info.disp, (u8) store->store_target->value_type->pointer_to->size);
+            }
             break;
         }
 
@@ -309,7 +390,8 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             Register *reg = function->claim_register(&code_section->data, source, inst);
 
-            move_memory_to_reg(&code_section->data, reg->machine_reg, source, 0, load->value_type->size);
+            // move_memory_to_reg(&code_section->data, reg->machine_reg, source, 0, load->value_type->size);
+            move_memory_to_reg_zero_ext(&code_section->data, reg->machine_reg, source, 0, load->value_type->size);
             return reg->machine_reg;
         }
 
@@ -324,6 +406,8 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             u8 target = emit_load_of_value(object, function, code_section, data_section, gep->index);
 
             Register *reg = function->claim_register(&code_section->data, target, inst);
+            if (gep->pointer_value->value_type->pointer_to->size > 1)
+                imul_reg64_with_imm32(&code_section->data, reg->machine_reg, gep->pointer_value->value_type->pointer_to->size, 8);
 
             add_reg64_to_reg64(&code_section->data, source, reg->machine_reg, gep->value_type->size);
             return reg->machine_reg;
@@ -381,7 +465,9 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             }
 
             // Spill RAX
-            function->claim_register(&code_section->data, RAX, inst);
+            maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
+            if (call->value_type->type != Type::VOID)
+                function->claim_register(&code_section->data, RAX, inst);
 
             if (object->target.is_system_v()) {
                 // load number of floating point parameters into %al
@@ -447,6 +533,8 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             // pop in reverse order
             for (size_t i = function->register_usage.count; i > 0; --i) {
                 auto &reg = function->register_usage[i-1];
+                if (reg.machine_reg == RSP || reg.machine_reg == RBP) continue;
+
                 pop_reg64(&code_section->data, reg.machine_reg);
             }
             
@@ -464,6 +552,8 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             // to much earlier code that expects all registers to be free.
             // This may not totally be correct, but works for now. -josh 7 August 2020
             for (auto &reg : function->register_usage) {
+                if (reg.machine_reg == RSP || reg.machine_reg == RBP) continue;
+
                 maybe_spill_register(function, &code_section->data, &reg);
             }
 
@@ -542,6 +632,8 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
     // :WastefulPushPops: @Cleanup pushing all the registers we may need is
     // a bit excessive and wasteful.
    for (auto reg : function->register_usage) {
+        if (reg.machine_reg == RSP || reg.machine_reg == RBP) continue;
+
         push_reg64(&code_section->data, reg.machine_reg);
    }
     
