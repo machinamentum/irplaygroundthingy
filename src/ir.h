@@ -4,6 +4,9 @@
 
 #include "linker_object.h"
 
+struct Function;
+struct Instruction;
+
 enum {
     VALUE_CONSTANT,
     VALUE_BASIC_BLOCK,
@@ -100,11 +103,6 @@ struct Constant : Value {
 };
 
 inline
-Constant *is_constant(Value *value) {
-    return (value->type == VALUE_CONSTANT) ? static_cast<Constant *>(value) : nullptr;
-}
-
-inline
 Constant *make_string_constant(String value) {
     Constant *con = new Constant();
     con->constant_type = Constant::STRING;
@@ -121,9 +119,6 @@ Constant *make_integer_constant(u64 value) {
     con->value_type = make_integer_type(8);
     return con;
 }
-
-struct Function;
-struct Instruction;
 
 struct Register {
     u8 machine_reg;
@@ -334,5 +329,18 @@ Instruction_Call *make_call(Function *func) {
     call->value_type = func->value_type->result_type;
     return call;
 }
+
+inline
+Constant *is_constant(Value *value) {
+    return (value->type == VALUE_CONSTANT) ? static_cast<Constant *>(value) : nullptr;
+}
+
+inline
+Instruction *is_instruction(Value *value) {
+    if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) return static_cast<Instruction *>(value);
+
+    return nullptr;
+}
+
 
 #endif

@@ -81,8 +81,8 @@ struct Array {
 
 
 struct String {
-    char *data;
-    size_t   length;
+    char  *data;
+    size_t length;
 
     String(const char *s = nullptr) {
         data = const_cast<char *>(s);

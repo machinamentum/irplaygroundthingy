@@ -15,22 +15,19 @@ struct mach_header_64 {
 };
 
 struct load_command {
-    
+    u32 cmd;
+    u32 cmdsize;
 };
 
 
-struct symtab_command {
-    u32 cmd;
-    u32 cmdsize;
+struct symtab_command : load_command {
     u32 symoff;
     u32 nsyms;
     u32 stroff;
     u32 strsize;
 };
 
-struct segment_command_64 {
-    u32 cmd;
-    u32 cmdsize;
+struct segment_command_64 : load_command {
     char segname[16];
     u64 vmaddr;
     u64 vmsize;

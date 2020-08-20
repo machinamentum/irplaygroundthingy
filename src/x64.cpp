@@ -13,6 +13,12 @@ const u8 RDI = 7;
 const u8 R8  = 8;
 const u8 R9  = 9;
 
+u32 ensure_aligned(u32 value, u32 alignment) {
+    u32 align_bits = alignment - 1;
+    if (value & align_bits) value += (alignment - (value & alignment));
+    return value;
+}
+
 // This magic is best explained on OSDev https://wiki.osdev.org/X86-64_Instruction_Encoding
 // REX prefixes the instruction, ModRM seems to post-fix the instruction but before data operands,
 // and both seem to be optional... and the processor magically understands these things and parses
@@ -346,6 +352,14 @@ bool is_in_register(Value *value) {
     }
 }
 
+u8 maybe_get_instruction_register(Value *value) {
+    if (Instruction *inst = is_instruction(value)) {
+        if (inst->result_stored_in) return inst->result_stored_in->machine_reg;
+    }
+
+    return 0xFF;
+}
+
 u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *current_block, Section *code_section, Section *data_section, Instruction *inst) {
     switch (inst->type) {
         case INSTRUCTION_ALLOCA: {
@@ -386,12 +400,15 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
         case INSTRUCTION_LOAD: {
             auto load = static_cast<Instruction_Load *>(inst);
 
-            u8 source = emit_load_of_value(object, function, code_section, data_section, load->pointer_value);
+            Address_Info source = get_address_value_of_pointer(object, function, code_section, data_section, load->pointer_value);
 
-            Register *reg = function->claim_register(&code_section->data, source, inst);
+            u8 target_reg = source.machine_reg;
+            if (target_reg == RBP || target_reg == RSP) target_reg = RAX;
+
+            Register *reg = function->claim_register(&code_section->data, target_reg, inst);
 
             // move_memory_to_reg(&code_section->data, reg->machine_reg, source, 0, load->value_type->size);
-            move_memory_to_reg_zero_ext(&code_section->data, reg->machine_reg, source, 0, load->value_type->size);
+            move_memory_to_reg_zero_ext(&code_section->data, reg->machine_reg, source.machine_reg, source.disp, load->value_type->size);
             return reg->machine_reg;
         }
 
@@ -417,12 +434,11 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
         case INSTRUCTION_ADD: {
             auto add = static_cast<Instruction_Add *>(inst);
 
-            // Ensure two registers are free for the operation
-            maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
-            maybe_spill_register(function, &code_section->data, &function->register_usage[RCX]);
+            u8 lhs_reg = maybe_get_instruction_register(add->lhs);
+            u8 rhs_reg = maybe_get_instruction_register(add->rhs);
 
-            u8 lhs_reg = emit_load_of_value(object, function, code_section, data_section, add->lhs);
-            u8 rhs_reg = emit_load_of_value(object, function, code_section, data_section, add->rhs);
+            if (lhs_reg == 0xFF) lhs_reg = emit_load_of_value(object, function, code_section, data_section, add->lhs, (rhs_reg == RAX) ? RCX : RAX);
+            if (rhs_reg == 0xFF) rhs_reg = emit_load_of_value(object, function, code_section, data_section, add->rhs, (lhs_reg == RAX) ? RCX : RAX);
 
             Register *reg = function->claim_register(&code_section->data, lhs_reg, inst);
 
@@ -459,7 +475,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                     }
                 }
 
-                u8 result = emit_load_of_value(object, function, code_section, data_section, p);
+                u8 result = emit_load_of_value(object, function, code_section, data_section, p, param_reg);
 
                 if (result != param_reg) move_reg64_to_reg64(&code_section->data, result, param_reg);
             }
@@ -562,16 +578,33 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 sub_imm32_from_reg64(&code_section->data, cond, 0, branch->condition->value_type->size);
 
                 maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
-                u8 fail_target = emit_load_of_value(object, function, code_section, data_section, branch->failure_target);
-
+                
                 code_section->data.append_byte(0x0F);
                 code_section->data.append_byte(0x85); // jne if cond if true goto true block
-                u32 *disp = (u32 *)code_section->data.allocate(4);
-                *disp = 3; // skip the next jmp instruction
+                u32 *jne_disp = (u32 *)code_section->data.allocate(4);
+                
+                auto failure_target = branch->failure_target;
+                if (failure_target->type == VALUE_BASIC_BLOCK) {
+                    *jne_disp = 5; // skip the next jmp instruction
 
-                code_section->data.append_byte(REX(1, 0, 0, 0));
-                code_section->data.append_byte(0xFF); // jmp reg
-                code_section->data.append_byte(ModRM(0b11, 4, fail_target & 0b0111));
+                    Basic_Block *block = static_cast<Basic_Block *>(failure_target);
+
+                    code_section->data.append_byte(0xE9);
+
+                    // @Cutnpaste from emit_load_of_value
+                    auto offset = code_section->data.size();
+                    block->text_locations_needing_addr_fixup.add(offset);
+
+                    u32 *value = (u32 *)code_section->data.allocate(4);
+                    block->text_ptrs_for_fixup.add(value);
+                } else {
+                    *jne_disp = 3; // skip the next jmp instruction
+
+                    u8 fail_target = emit_load_of_value(object, function, code_section, data_section, branch->failure_target);
+                    code_section->data.append_byte(REX(1, 0, 0, 0));
+                    code_section->data.append_byte(0xFF); // jmp reg
+                    code_section->data.append_byte(ModRM(0b11, 4, fail_target & 0b0111));
+                }
             }
 
             Basic_Block *next_block = nullptr;
@@ -583,11 +616,25 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             }
 
             if (branch->true_target != next_block) {
-                u8 target = emit_load_of_value(object, function, code_section, data_section, branch->true_target);
+                auto true_target = branch->true_target;
+                if (true_target->type == VALUE_BASIC_BLOCK) {
+                    Basic_Block *block = static_cast<Basic_Block *>(true_target);
 
-                code_section->data.append_byte(REX(1, 0, 0, 0));
-                code_section->data.append_byte(0xFF); // jmp reg
-                code_section->data.append_byte(ModRM(0b11, 4, target & 0b0111));
+                    code_section->data.append_byte(0xE9);
+
+                    // @Cutnpaste from emit_load_of_value
+                    auto offset = code_section->data.size();
+                    block->text_locations_needing_addr_fixup.add(offset);
+
+                    u32 *value = (u32 *)code_section->data.allocate(4);
+                    block->text_ptrs_for_fixup.add(value);
+                } else {
+                    u8 target = emit_load_of_value(object, function, code_section, data_section, branch->true_target);
+
+                    code_section->data.append_byte(REX(1, 0, 0, 0));
+                    code_section->data.append_byte(0xFF); // jmp reg
+                    code_section->data.append_byte(ModRM(0b11, 4, target & 0b0111));
+                }
             }
             break;
         }
@@ -681,7 +728,7 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
 
         code_section->data.append_byte(0xE9); // jmp loop start
         disp = (u32 *)code_section->data.allocate(4);
-        *disp = (loop_start - code_section->data.size()); // skip the next jmp instruction
+        *disp = (loop_start - code_section->data.size());
     }
 
 
@@ -703,7 +750,7 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
     }
 
     // Ensure stack is 16-byte aligned.
-    if ((function->stack_size % 16)) function->stack_size += 16 - (function->stack_size % 16);
+    function->stack_size = ensure_aligned(function->stack_size, 16);
 
 
     assert(function->stack_size >= 0);
