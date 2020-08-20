@@ -6,6 +6,7 @@
 
 struct Function;
 struct Instruction;
+struct Basic_Block;
 
 enum {
     VALUE_CONSTANT,
@@ -84,6 +85,8 @@ Type *make_pointer_type(Type *pointee) {
 struct Value {
     u32 type;
     Type *value_type;
+
+    String name;
 };
 
 struct Constant : Value {
@@ -129,6 +132,10 @@ struct Register {
 struct Instruction : Value {
     Register *result_stored_in    = nullptr;
     s32 result_spilled_onto_stack = 0;
+
+    Basic_Block *inserted_into_block = nullptr;
+    u32 insertion_index = 0xFFFFFFFF;
+    bool emitted = false;
 };
 
 struct Instruction_Call : Instruction {
@@ -218,6 +225,7 @@ Instruction_Add *make_add(Value *lhs, Value *rhs) {
     add->value_type = lhs->value_type;
     add->lhs = lhs;
     add->rhs = rhs;
+    add->value_type = lhs->value_type;
     return add;
 }
 
@@ -228,6 +236,7 @@ Instruction_Sub *make_sub(Value *lhs, Value *rhs) {
     sub->value_type = lhs->value_type;
     sub->lhs = lhs;
     sub->rhs = rhs;
+    sub->value_type = lhs->value_type;
     return sub;
 }
 
@@ -261,10 +270,29 @@ struct Basic_Block : Value {
     Basic_Block() { type = VALUE_BASIC_BLOCK; }
     Array<Instruction *> instructions;
 
+    Function *inserted_into_function = nullptr;
+    u32 insertion_index = 0xFFFFFFFF;
+
     // For code gen
     u64 text_location = 0;
     Array<u64>   text_locations_needing_addr_fixup;
     Array<u32 *> text_ptrs_for_fixup;
+
+    bool has_terminator() {
+        if (instructions.count == 0) return false;
+
+        auto last = instructions[instructions.count-1];
+        return last->type == INSTRUCTION_BRANCH || last->type == INSTRUCTION_RETURN;
+    }
+
+    void insert(Instruction *inst) {
+        assert(!has_terminator());
+        assert(inst->inserted_into_block == nullptr);
+
+        inst->inserted_into_block = this;
+        inst->insertion_index = this->instructions.count;
+        this->instructions.add(inst);
+    }
 };
 
 struct Global_Value : Constant {
@@ -313,6 +341,13 @@ struct Function : Global_Value {
 
     Array<u32 *>    stack_size_fixups;
     s32 stack_size = 0;
+
+    void insert(Basic_Block *block) {
+        block->insertion_index = this->blocks.count;
+        block->inserted_into_function = this;
+
+        this->blocks.add(block);
+    }
 };
 
 struct Compilation_Unit {

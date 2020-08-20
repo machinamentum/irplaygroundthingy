@@ -13,9 +13,10 @@ const u8 RDI = 7;
 const u8 R8  = 8;
 const u8 R9  = 9;
 
-u32 ensure_aligned(u32 value, u32 alignment) {
-    u32 align_bits = alignment - 1;
-    if (value & align_bits) value += (alignment - (value & alignment));
+template <typename T>
+T ensure_aligned(T value, T alignment) {
+    T align_bits = alignment - 1;
+    if (value & align_bits) value += (alignment - (value & align_bits));
     return value;
 }
 
@@ -350,6 +351,8 @@ bool is_in_register(Value *value) {
         auto inst = static_cast<Instruction *>(value);
         return inst->result_stored_in != nullptr;
     }
+
+    return false;
 }
 
 u8 maybe_get_instruction_register(Value *value) {
@@ -361,6 +364,7 @@ u8 maybe_get_instruction_register(Value *value) {
 }
 
 u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *current_block, Section *code_section, Section *data_section, Instruction *inst) {
+    inst->emitted = true;
     switch (inst->type) {
         case INSTRUCTION_ALLOCA: {
             auto _alloca = static_cast<Instruction_Alloca *>(inst);
@@ -733,6 +737,7 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
 
 
     for (auto block : function->blocks) {
+        assert(block->has_terminator());
         block->text_location = code_section->data.size();
 
         for (auto inst : block->instructions) {
@@ -751,6 +756,7 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
 
     // Ensure stack is 16-byte aligned.
     function->stack_size = ensure_aligned(function->stack_size, 16);
+    assert((function->stack_size & (15)) == 0);
 
 
     assert(function->stack_size >= 0);

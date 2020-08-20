@@ -8,12 +8,24 @@
 
 char *bf_program = nullptr;
 
-void gen_bf_instruction(Function *function, Basic_Block *block, Value *data_buffer_alloca, Value *index_alloca, Function *putchar_func, Function *getchar_func) {
-    auto load = make_load(index_alloca);
-    block->instructions.add(load);
+void gen_bf_instruction(Function *function, Basic_Block *block, Value *data_buffer_alloca, Value *index_alloca, Function *putchar_func, Function *getchar_func,
+                        Instruction **loadptr = nullptr, Instruction **gepptr = nullptr, Basic_Block **next_block = nullptr) {
+    Instruction *load = nullptr;
+    Instruction *gep  = nullptr;
 
-    auto gep = make_gep(data_buffer_alloca, load);
-    block->instructions.add(gep);
+    if (!loadptr) {
+        load = make_load(index_alloca);
+        block->insert(load);
+    } else {
+        load = *loadptr;
+    }
+
+    if (!gepptr) {
+        gep = make_gep(data_buffer_alloca, load);
+        block->insert(gep);
+    } else {
+        gep = *gepptr;
+    }
 
     while (*bf_program) {
         char c = *bf_program;
@@ -22,104 +34,103 @@ void gen_bf_instruction(Function *function, Basic_Block *block, Value *data_buff
         switch(c) {
             case '+': {
                 auto load_value = make_load(gep);
-                block->instructions.add(load_value);
+                block->insert(load_value);
 
                 auto add = make_add(load_value, make_integer_constant(1));
-                block->instructions.add(add);
+                block->insert(add);
 
-                block->instructions.add(make_store(add, gep));
+                block->insert(make_store(add, gep));
                 break;
             }
 
             case '-': {
                 auto load_value = make_load(gep);
-                block->instructions.add(load_value);
+                block->insert(load_value);
 
                 auto sub = make_sub(load_value, make_integer_constant(1));
-                block->instructions.add(sub);
+                block->insert(sub);
 
-                block->instructions.add(make_store(sub, gep));
+                block->insert(make_store(sub, gep));
                 break;
             }
 
             case '>': {
-                auto load = make_load(index_alloca);
-                block->instructions.add(load);
-
                 auto add = make_add(load, make_integer_constant(1));
-                block->instructions.add(add);
+                block->insert(add);
+
+                load = add;
 
                 gep = make_gep(data_buffer_alloca, add);
-                block->instructions.add(gep);
+                block->insert(gep);
 
-                block->instructions.add(make_store(add, index_alloca));
+                // block->insert(make_store(add, index_alloca));
                 break;
             }
 
             case '<': {
-                auto load = make_load(index_alloca);
-                block->instructions.add(load);
-
                 auto sub = make_sub(load, make_integer_constant(1));
-                block->instructions.add(sub);
+                block->insert(sub);
+
+                load = sub;
 
                 gep = make_gep(data_buffer_alloca, sub);
-                block->instructions.add(gep);
+                block->insert(gep);
 
-                block->instructions.add(make_store(sub, index_alloca));
+                // block->insert(make_store(sub, index_alloca));
                 break;
             }
 
             case '.': {
                 auto load_value = make_load(gep);
-                block->instructions.add(load_value);
+                block->insert(load_value);
 
                 Instruction_Call *call = make_call(putchar_func); // @Temporary int type
                 call->parameters.add(load_value);
-                block->instructions.add(call);
+                block->insert(call);
                 break;
             }
 
             case ',': {
                 Instruction_Call *call = make_call(getchar_func);
-                block->instructions.add(call);
+                block->insert(call);
 
-                block->instructions.add(make_store(call, gep));
+                block->insert(make_store(call, gep));
                 break;
             }
 
             case '[': {
                 Basic_Block *loop_header = new Basic_Block();
-                function->blocks.add(loop_header);
+                loop_header->name = "loop_header";
+                function->insert(loop_header);
 
                 Basic_Block *loop_body = new Basic_Block();
-                function->blocks.add(loop_body);
-
-                block->instructions.add(make_branch(nullptr, loop_header));
-
-                auto load = make_load(index_alloca);
-                loop_header->instructions.add(load);
-
-                auto gep = make_gep(data_buffer_alloca, load);
-                loop_header->instructions.add(gep);
-
-                auto load_value = make_load(gep);
-                loop_header->instructions.add(load_value);
+                loop_body->name = "loop_body";
+                function->insert(loop_body);
 
                 Basic_Block *exit_block = new Basic_Block();
-                function->blocks.add(exit_block);
+                exit_block->name = "exit_block";
 
-                loop_header->instructions.add(make_branch(load_value, loop_body, exit_block));
+                block->insert(make_branch(nullptr, loop_header));
 
-                gen_bf_instruction(function, loop_body, data_buffer_alloca, index_alloca, putchar_func, getchar_func);
+                {
+                    auto load_value = make_load(gep);
+                    loop_header->insert(load_value);
+                    loop_header->insert(make_branch(load_value, loop_body, exit_block));
+                }
 
-                loop_body->instructions.add(make_branch(nullptr, loop_header));
+                Basic_Block *next_block = nullptr;
+                gen_bf_instruction(function, loop_body, data_buffer_alloca, index_alloca, putchar_func, getchar_func, &load, &gep, &next_block);
+                next_block->insert(make_branch(nullptr, loop_header));
 
+                function->insert(exit_block);
                 block = exit_block;
                 break;
             }
 
             case ']': {
+                *loadptr    = load;
+                *gepptr     = gep;
+                *next_block = block;
                 return;
             }
         }
@@ -176,27 +187,27 @@ int main(int argc, char **argv) {
     unit.functions.add(main_func);
 
     Basic_Block *block = new Basic_Block();
-    main_func->blocks.add(block);
+    main_func->insert(block);
 
     Instruction_Alloca *data_buffer_alloca = make_alloca(make_integer_type(1), 30000);
-    block->instructions.add(data_buffer_alloca);
+    block->insert(data_buffer_alloca);
 
     Instruction_Call *call = make_call(memset_func);
     call->parameters.add(data_buffer_alloca);
     call->parameters.add(make_integer_constant(0));
-    call->parameters.add(make_integer_constant(30000));
-    block->instructions.add(call);
+    call->parameters.add(make_integer_constant(30000 * data_buffer_alloca->value_type->pointer_to->size));
+    block->insert(call);
 
     Instruction_Alloca *index_alloca = make_alloca(make_integer_type(8), 1);
-    block->instructions.add(index_alloca);
+    block->insert(index_alloca);
 
-    block->instructions.add(make_store(make_integer_constant(1000), index_alloca));
+    block->insert(make_store(make_integer_constant(512), index_alloca));
 
     gen_bf_instruction(main_func, block, data_buffer_alloca, index_alloca, putchar_func, getchar_func);
 
-    main_func->blocks[main_func->blocks.count-1]->instructions.add(new Instruction_Return());
+    main_func->blocks[main_func->blocks.count-1]->insert(new Instruction_Return());
 
-    // emit_obj_file(&unit);
-    do_jit_and_run_program_main(&unit);
+    emit_obj_file(&unit);
+    // do_jit_and_run_program_main(&unit);
     return 0;
 }
