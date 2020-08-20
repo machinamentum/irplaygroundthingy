@@ -107,7 +107,6 @@ void gen_bf_instruction(Function *function, Basic_Block *block, Value *data_buff
                 loop_header->insert(load_value);
 
                 Basic_Block *exit_block = new Basic_Block();
-                
 
                 loop_header->insert(make_branch(load_value, loop_body, exit_block));
 
@@ -147,12 +146,47 @@ char *get_file_contents(char *path) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) {
-        printf("Usage: bf <brainfuck source to compile>\n");
+    char *filename = nullptr;
+    u32 cell_size = 1;
+
+    for (int i = 1; i < argc; ++i) {
+        char *option = argv[i];
+
+        if (option[0] == '-') {
+            if (strcmp("-cell-size", option) == 0) {
+                ++i;
+                if (i >= argc) {
+                    printf("No size argument given to -cell-size switch.\n");
+                    return -1;
+                }
+
+                char *size = argv[i];
+                cell_size = strtol(size, nullptr, 10);
+                switch (cell_size) {
+                    case 1:
+                    case 2:
+                    case 4:
+                        break;
+                    default:
+                        printf("Invalid cell size provided to -cell-size. Must be 1, 2, or 4.\n");
+                        return -1;
+                }
+                continue;
+            } 
+
+            printf("Unknown option: %s\n", option);
+            return -1;
+        } else {
+            filename = option;
+        }
+    }
+
+    if (!filename) {
+        printf("Usage: %s <brainfuck source to compile>\n", argv[0]);
         return -1;
     }
 
-    bf_program = get_file_contents(argv[1]);
+    bf_program = get_file_contents(filename);
 
     Compilation_Unit unit;
     unit.target = get_host_target();
@@ -180,7 +214,7 @@ int main(int argc, char **argv) {
     Basic_Block *block = new Basic_Block();
     main_func->insert(block);
 
-    Instruction_Alloca *data_buffer_alloca = make_alloca(make_integer_type(1), 30000);
+    Instruction_Alloca *data_buffer_alloca = make_alloca(make_integer_type(cell_size), 30000);
     block->insert(data_buffer_alloca);
 
     Instruction_Call *call = make_call(memset_func);
