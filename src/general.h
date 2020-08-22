@@ -122,13 +122,18 @@ struct Data_Buffer {
         c->count += size;
     }
 
-    void *allocate(u32 size) {
+    void *allocate_bytes_unaligned(u32 size) {
         Chunk *c = &chunks[chunks.count-1];
         if (c->count+size >= c->reserved) c = new_chunk(size);
 
         void *result = c->data+c->count;
         c->count += size;
         return result;
+    }
+
+    template<typename T>
+    T *allocate_unaligned() {
+        return (T *)allocate_bytes_unaligned(sizeof(T));
     }
 
     void append(Data_Buffer *other) {

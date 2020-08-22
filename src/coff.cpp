@@ -79,7 +79,7 @@ const u8 IMAGE_SYM_DTYPE_FUNCTION = 0x20;
 void emit_coff_file(Linker_Object *object) {
     Data_Buffer buffer;
 
-    PE_Coff_Header *header = (PE_Coff_Header *)buffer.allocate(sizeof(PE_Coff_Header));
+    PE_Coff_Header *header = buffer.allocate_unaligned<PE_Coff_Header>();
     header->Machine              = IMAGE_FILE_MACHINE_AMD64;
 
     header->NumberOfSections     = static_cast<u16>(object->sections.count);
@@ -91,7 +91,7 @@ void emit_coff_file(Linker_Object *object) {
 
 
     for (auto &sect : object->sections) {
-        PE_Coff_Section_Header  *section = (PE_Coff_Section_Header *)buffer.allocate(sizeof(PE_Coff_Section_Header));
+        PE_Coff_Section_Header  *section = buffer.allocate_unaligned<PE_Coff_Section_Header>();
         memset(section, 0, sizeof(PE_Coff_Section_Header));
 
         sect.mach_section = section;
@@ -132,7 +132,7 @@ void emit_coff_file(Linker_Object *object) {
         section->PointerToRelocations = buffer.size();
 
         if (section->Characteristics & IMAGE_SCN_LNK_NRELOC_OVFL) {
-            PE_Coff_Relocation *info = (PE_Coff_Relocation *)buffer.allocate(PE_COFF_RELOCATION_SIZE);
+            PE_Coff_Relocation *info = (PE_Coff_Relocation *)buffer.allocate_bytes_unaligned(PE_COFF_RELOCATION_SIZE);
 
             info->VirtualAddress   = sect.relocations.count;
             info->SymbolTableIndex = 0;
@@ -140,7 +140,7 @@ void emit_coff_file(Linker_Object *object) {
         }
 
         for (auto &reloc : sect.relocations) {
-            PE_Coff_Relocation *info = (PE_Coff_Relocation *)buffer.allocate(PE_COFF_RELOCATION_SIZE);
+            PE_Coff_Relocation *info = (PE_Coff_Relocation *)buffer.allocate_bytes_unaligned(PE_COFF_RELOCATION_SIZE);
             info->VirtualAddress   = reloc.offset;
             info->SymbolTableIndex = reloc.symbol_index;
 
@@ -159,7 +159,7 @@ void emit_coff_file(Linker_Object *object) {
     header->PointerToSymbolTable = buffer.size();
 
     for (auto &symbol : object->symbol_table) {
-        PE_Coff_Symbol *sym = (PE_Coff_Symbol *)buffer.allocate(PE_COFF_SYMBOL_SIZE);
+        PE_Coff_Symbol *sym = (PE_Coff_Symbol *)buffer.allocate_bytes_unaligned(PE_COFF_SYMBOL_SIZE);
 
         if (symbol.linkage_name.length <= 8) {
             memset(sym->Name.ShortName, 0, 8);
@@ -186,7 +186,7 @@ void emit_coff_file(Linker_Object *object) {
     }
 
     assert(string_buffer.size() <= (U32_MAX-4));
-    u32 *string_table_size = (u32 *)buffer.allocate(4);
+    u32 *string_table_size = buffer.allocate_unaligned<u32>();
     *string_table_size = string_buffer.size() + 4; // +4 to include the string_table_size field itself.
 
     buffer.append(&string_buffer);

@@ -54,7 +54,7 @@ void _move_bidrectional(Data_Buffer *dataptr, u8 value_reg, u8 ptrbase, s32 disp
     if (!to_memory) op += 0x02;
 
     _two_register_operand_instruction(dataptr, op, 0x2, value_reg, ptrbase, size);
-    s32 *value = (s32  *)dataptr->allocate(4);
+    s32 *value = (s32  *)dataptr->allocate_unaligned<s32>();
     *value = disp;
 }
 
@@ -72,7 +72,7 @@ void move_memory_to_reg(Data_Buffer *dataptr, u8 dst, u8 src, s32 disp, u32 size
 
 u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 imm, u8 reg) {
     _single_register_operand_instruction(dataptr, 0xB8, reg, 8);
-    u64 *value = (u64 *)dataptr->allocate(8);
+    u64 *value = dataptr->allocate_unaligned<u64>();
     *value = imm;
 
     return value;
@@ -81,12 +81,12 @@ u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 imm, u8 reg) {
 void move_imm32_to_memory(Data_Buffer *dataptr, u32 value, u8 dst, s32 disp, u32 size) {
     u8 op = (size == 1) ? 0xC6 : 0xC7;
     _two_register_operand_instruction(dataptr, op, 0x2, RAX, dst, size);
-    s32 *offset = (s32 *)dataptr->allocate(4);
+    s32 *offset = dataptr->allocate_unaligned<s32>();
     *offset = disp;
 
 
     if (size > 4) size = 4;
-    u8 *operand = (u8 *)dataptr->allocate(size);
+    u8 *operand = (u8 *)dataptr->allocate_bytes_unaligned(size);
     
     if (size == 1) *       operand = static_cast<u8> (value);
     if (size == 2) *(u16 *)operand = static_cast<u16>(value);
@@ -99,7 +99,7 @@ void move_memory_to_reg_zero_ext(Data_Buffer *dataptr, u8 value_reg, u8 ptrbase,
 
         size = 4; // always load into 32-bit register
         _two_register_operand_instruction(dataptr, op, 0x2, value_reg, ptrbase, size, true);
-        s32 *value = (s32  *)dataptr->allocate(4);
+        s32 *value = dataptr->allocate_unaligned<s32>();
         *value = disp;
     } else {
         move_memory_to_reg(dataptr, value_reg, ptrbase, disp, size);
@@ -114,7 +114,7 @@ void lea_rip_relative_into_reg64(Data_Buffer *dataptr, u8 reg) {
 void lea_into_reg64(Data_Buffer *dataptr, u8 dst, u8 src, s32 disp) {
     _two_register_operand_instruction(dataptr, 0x8D, 0x2, dst, src, 8);
 
-    s32 *value = (s32  *)dataptr->allocate(4);
+    s32 *value = dataptr->allocate_unaligned<s32>();
     *value = disp;
 }
 
@@ -131,7 +131,7 @@ u32 *_mathop_imm32_reg64(Data_Buffer *dataptr, u8 reg, u32 value, u32 size, u8 o
     _two_register_operand_instruction(dataptr, op, 0x3, op_select, reg, size);
 
     if (size > 4) size = 4;
-    u8 *operand = (u8 *)dataptr->allocate(size);
+    u8 *operand = (u8 *)dataptr->allocate_bytes_unaligned(size);
     
     if (size == 1) *       operand = static_cast<u8> (value);
     if (size == 2) *(u16 *)operand = static_cast<u16>(value);
@@ -158,7 +158,7 @@ void imul_reg64_with_imm32(Data_Buffer *dataptr, u8 reg, u32 value, u32 size) {
     _two_register_operand_instruction(dataptr, op, 0x3, reg, reg, size);
 
     if (size > 4) size = 4;
-    u8 *operand = (u8 *)dataptr->allocate(size);
+    u8 *operand = (u8 *)dataptr->allocate_bytes_unaligned(size);
     
     if (size == 1) *       operand = static_cast<u8> (value);
     if (size == 2) *(u16 *)operand = static_cast<u16>(value);
@@ -260,7 +260,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
             // copy the string characters into the data section
             assert(constant->string_value.length <= U32_MAX);
             u32 length = static_cast<u32>(constant->string_value.length);
-            void *data_target = data_section->data.allocate(length);
+            void *data_target = data_section->data.allocate_bytes_unaligned(length);
             memcpy(data_target, constant->string_value.data, length);
             data_section->data.append_byte(0);
 
@@ -276,7 +276,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
                 reloc.symbol_index = data_section->symbol_index;
                 reloc.size = 8;
 
-                u64 *addr = (u64 *)code_section->data.allocate(8);
+                u64 *addr = code_section->data.allocate_unaligned<u64>();
                 *addr = data_sec_offset;;
                 reloc.addend = data_sec_offset;
 
@@ -294,7 +294,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
 
                 code_section->relocations.add(reloc);
 
-                u32 *value = (u32 *)code_section->data.allocate(4);
+                u32 *value = code_section->data.allocate_unaligned<u32>();
                 *value = data_sec_offset;
             }
 
@@ -315,7 +315,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
         auto offset = code_section->data.size();
         block->text_locations_needing_addr_fixup.add(offset);
 
-        u32 *value = (u32 *)code_section->data.allocate(4);
+        u32 *value = code_section->data.allocate_unaligned<u32>();
         block->text_ptrs_for_fixup.add(value);
         return reg->machine_reg;
     } else if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) {
@@ -493,7 +493,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 // load number of floating point parameters into %al
                 code_section->data.append_byte(REX(1, 0, 0, 0));
                 code_section->data.append_byte(0xB8 + RAX);
-                u64 *value = (u64 *)code_section->data.allocate(8);
+                u64 *value = code_section->data.allocate_unaligned<u64>();
                 *value = 0;
             }
 
@@ -510,7 +510,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 reloc.symbol_index = get_symbol_index(object, static_cast<Function *>(call->call_target));
                 reloc.size = 8;
 
-                u64 *addr = (u64 *)code_section->data.allocate(8);
+                u64 *addr = code_section->data.allocate_unaligned<u64>();
                 *addr = 0;
                 reloc.addend = 0; // @TODO
 
@@ -530,7 +530,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 reloc.symbol_index = get_symbol_index(object, static_cast<Function *>(call->call_target));
                 reloc.size = 4;
 
-                u32 *addr = (u32 *)code_section->data.allocate(4);
+                u32 *addr = code_section->data.allocate_unaligned<u32>();
                 *addr = 0;
                 reloc.addend = 0; // @TODO
 
@@ -585,7 +585,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 
                 code_section->data.append_byte(0x0F);
                 code_section->data.append_byte(0x85); // jne if cond if true goto true block
-                u32 *jne_disp = (u32 *)code_section->data.allocate(4);
+                u32 *jne_disp = code_section->data.allocate_unaligned<u32>();
                 
                 auto failure_target = branch->failure_target;
                 if (failure_target->type == VALUE_BASIC_BLOCK) {
@@ -599,7 +599,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                     auto offset = code_section->data.size();
                     block->text_locations_needing_addr_fixup.add(offset);
 
-                    u32 *value = (u32 *)code_section->data.allocate(4);
+                    u32 *value = code_section->data.allocate_unaligned<u32>();
                     block->text_ptrs_for_fixup.add(value);
                 } else {
                     *jne_disp = 3; // skip the next jmp instruction
@@ -630,7 +630,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                     auto offset = code_section->data.size();
                     block->text_locations_needing_addr_fixup.add(offset);
 
-                    u32 *value = (u32 *)code_section->data.allocate(4);
+                    u32 *value = code_section->data.allocate_unaligned<u32>();
                     block->text_ptrs_for_fixup.add(value);
                 } else {
                     u8 target = emit_load_of_value(object, function, code_section, data_section, branch->true_target);
@@ -727,11 +727,11 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
 
         code_section->data.append_byte(0x0F);
         code_section->data.append_byte(0x8C); // jl if RAX < 0 break
-        u32 *disp = (u32 *)code_section->data.allocate(4);
+        u32 *disp = code_section->data.allocate_unaligned<u32>();
         *disp = 5; // skip the next jmp instruction
 
         code_section->data.append_byte(0xE9); // jmp loop start
-        disp = (u32 *)code_section->data.allocate(4);
+        disp = code_section->data.allocate_unaligned<u32>();
         *disp = (loop_start - code_section->data.size());
     }
 

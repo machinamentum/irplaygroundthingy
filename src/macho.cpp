@@ -124,7 +124,7 @@ const u32 S_ATTR_PURE_INSTRUCTIONS = 0x80000000;
 void emit_macho_file(Linker_Object *object) {
     Data_Buffer buffer;
 
-    mach_header_64 *header = (mach_header_64 *)buffer.allocate(sizeof(mach_header_64));
+    mach_header_64 *header = buffer.allocate_unaligned<mach_header_64>();
     header->magic = MH_MAGIC_64;
     header->cputype = CPU_TYPE_x86_64;
     header->cpusubtype = 3;
@@ -136,7 +136,7 @@ void emit_macho_file(Linker_Object *object) {
 
     auto load_cmds_start = buffer.size();
 
-    auto symtab_cmd = (symtab_command *)buffer.allocate(sizeof(symtab_command));
+    auto symtab_cmd = buffer.allocate_unaligned<symtab_command>();
     symtab_cmd->cmd     = LC_SYMTAB;
     symtab_cmd->cmdsize = sizeof(symtab_command);
     // symtab_cmd->symoff = ;
@@ -144,7 +144,7 @@ void emit_macho_file(Linker_Object *object) {
     // symtab_cmd->stroff  = ;
     // symtab_cmd->strsize = ;
 
-    auto segment_cmd = (segment_command_64 *)buffer.allocate(sizeof(segment_command_64));
+    auto segment_cmd = buffer.allocate_unaligned<segment_command_64>();
     segment_cmd->cmd     = LC_SEGMENT_64;
     segment_cmd->cmdsize = sizeof(segment_command_64) + sizeof(section_64)*object->sections.count;
     memset(segment_cmd->segname, 0, 16);
@@ -157,7 +157,7 @@ void emit_macho_file(Linker_Object *object) {
     segment_cmd->flags = 0;
 
     for (auto &sect : object->sections) {
-        section_64  *section = (section_64 *)buffer.allocate(sizeof(section_64));
+        section_64  *section = buffer.allocate_unaligned<section_64>();
         memset(section, 0, sizeof(section_64));
 
         sect.mach_section = section;
@@ -196,7 +196,7 @@ void emit_macho_file(Linker_Object *object) {
         section->nreloc = sect.relocations.count;
 
         for (auto &reloc : sect.relocations) {
-            relocation_info *info = (relocation_info *)buffer.allocate(sizeof(relocation_info));
+            relocation_info *info = buffer.allocate_unaligned<relocation_info>();
             info->r_address = reloc.offset;
 
             u32 size = 0;
@@ -226,7 +226,7 @@ void emit_macho_file(Linker_Object *object) {
     symtab_cmd->symoff = buffer.size();
 
     for (auto &symbol : object->symbol_table) {
-        auto sym = (nlist_64 *)buffer.allocate(sizeof(nlist_64));
+        auto sym = buffer.allocate_unaligned<nlist_64>();
 
         if (symbol.linkage_name.length) {
             sym->n_strx = string_buffer.size();
