@@ -9,7 +9,7 @@
 char *bf_program = nullptr;
 
 void gen_bf_instruction(Function *function, Basic_Block *block, Value *data_buffer_alloca, Value *index_alloca, Function *putchar_func, Function *getchar_func, Basic_Block **last_block) {
-    auto load = make_load(index_alloca);
+    Instruction *load = make_load(index_alloca);
     block->insert(load);
 
     auto gep = make_gep(data_buffer_alloca, load);
@@ -43,11 +43,10 @@ void gen_bf_instruction(Function *function, Basic_Block *block, Value *data_buff
             }
 
             case '>': {
-                auto load = make_load(index_alloca);
-                block->insert(load);
-
                 auto add = make_add(load, make_integer_constant(1));
                 block->insert(add);
+
+                load = add;
 
                 gep = make_gep(data_buffer_alloca, add);
                 block->insert(gep);
@@ -57,11 +56,10 @@ void gen_bf_instruction(Function *function, Basic_Block *block, Value *data_buff
             }
 
             case '<': {
-                auto load = make_load(index_alloca);
-                block->insert(load);
-
                 auto sub = make_sub(load, make_integer_constant(1));
                 block->insert(sub);
+
+                load = sub;
 
                 gep = make_gep(data_buffer_alloca, sub);
                 block->insert(gep);
@@ -97,9 +95,6 @@ void gen_bf_instruction(Function *function, Basic_Block *block, Value *data_buff
 
                 block->insert(make_branch(nullptr, loop_header));
 
-                auto load = make_load(index_alloca);
-                loop_header->insert(load);
-
                 auto gep = make_gep(data_buffer_alloca, load);
                 loop_header->insert(gep);
 
@@ -132,10 +127,12 @@ char *get_file_contents(char *path) {
 
     fseek(file, 0, SEEK_END);
     auto len = ftell(file);
+    assert(len != -1);
     fseek(file, 0, SEEK_SET);
 
-    char *buffer = (char *)malloc(len+1);
-    size_t amount = len;
+    size_t amount = static_cast<size_t>(len);
+    char *buffer = (char *)malloc(amount+1);
+
     do {
         size_t read = fread(buffer, 1, amount, file);
         amount -= read;
@@ -161,7 +158,7 @@ int main(int argc, char **argv) {
                 }
 
                 char *size = argv[i];
-                cell_size = strtol(size, nullptr, 10);
+                cell_size = (u32)strtol(size, nullptr, 10);
                 switch (cell_size) {
                     case 1:
                     case 2:
