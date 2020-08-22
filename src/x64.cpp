@@ -379,20 +379,14 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
         case INSTRUCTION_STORE: {
             auto store = static_cast<Instruction_Store *>(inst);
 
-            // Ensure two registers are free for the operation
-            maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
-            maybe_spill_register(function, &code_section->data, &function->register_usage[RCX]);
-
             Address_Info target_info = get_address_value_of_pointer(object, function, code_section, data_section, store->store_target, RAX);
 
             Constant *constant = is_constant(store->source_value);
             if (constant && constant->is_integer()) {
                 move_imm32_to_memory(&code_section->data, constant->integer_value, target_info.machine_reg, target_info.disp, store->store_target->value_type->pointer_to->size);
             } else {
-                u8 second = RCX;
-                if (target_info.machine_reg == second) second = RAX;
-
-                u8 source = emit_load_of_value(object, function, code_section, data_section, store->source_value, second);
+                u8 source = maybe_get_instruction_register(store->source_value);
+                if (source == 0xFF) source = emit_load_of_value(object, function, code_section, data_section, store->source_value, (target_info.machine_reg == RAX) ? RCX : RAX);
 
                 assert(target_info.machine_reg != source);
 
@@ -419,12 +413,13 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
         case INSTRUCTION_GEP: {
             Instruction_GEP *gep = static_cast<Instruction_GEP *>(inst);
 
-            // Ensure two registers are free for the operation
-            maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
-            maybe_spill_register(function, &code_section->data, &function->register_usage[RCX]);
+            u8 source = maybe_get_instruction_register(gep->pointer_value);
+            u8 target = maybe_get_instruction_register(gep->index);
 
-            u8 source = emit_load_of_value(object, function, code_section, data_section, gep->pointer_value);
-            u8 target = emit_load_of_value(object, function, code_section, data_section, gep->index);
+            if (target == 0xFF) target = emit_load_of_value(object, function, code_section, data_section, gep->index,         (source == RAX) ? RCX : RAX);
+            if (source == 0xFF) source = emit_load_of_value(object, function, code_section, data_section, gep->pointer_value, (target == RAX) ? RCX : RAX);
+
+            assert(source != target);
 
             Register *reg = function->claim_register(&code_section->data, target, inst);
             if (gep->pointer_value->value_type->pointer_to->size > 1)
@@ -460,6 +455,30 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             }
 
             u8 index = 0;
+
+            // Spill all argument passing registers to preserve
+            // their values in case the callee wishes to use them
+            while (true) {
+                u8 param_reg = 0xFF;
+
+                if (object->target.is_win32()) {
+                    param_reg = get_next_win64_abi_register(&index);
+                } else {
+                    param_reg = get_next_system_v_abi_register(&index);
+                }
+
+                if (param_reg == 0xFF) break;
+
+                for (auto &reg : function->register_usage) {
+                    if (reg.machine_reg == param_reg) {
+                        maybe_spill_register(function, &code_section->data, &reg);
+                        break;
+                    }
+                }
+            }
+
+            index = 0;
+
             for (auto p : call->parameters) {
                 u8 param_reg = 0xFF;
 
@@ -473,7 +492,6 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
                 for (auto &reg : function->register_usage) {
                     if (reg.machine_reg == param_reg) {
-                        maybe_spill_register(function, &code_section->data, &reg);
                         reg.is_free = false;
                         break;
                     }
