@@ -222,8 +222,11 @@ u8 get_next_win64_abi_register(u8 *index) {
     }
 }
 
-Register *get_free_or_suggested_register(Function *function, Data_Buffer *dataptr, u8 suggested_register, Instruction *inst) {
-    Register *reg = function->get_free_register();
+Register *get_free_or_suggested_register(Function *function, Data_Buffer *dataptr, u8 suggested_register, bool force_use_suggested, Instruction *inst) {
+    Register *reg = nullptr;
+
+    if (!force_use_suggested) reg = function->get_free_register();
+
     if (!reg) reg = &function->register_usage[suggested_register];
     
     maybe_spill_register(function, dataptr, reg);
@@ -233,12 +236,12 @@ Register *get_free_or_suggested_register(Function *function, Data_Buffer *datapt
     return reg;
 }
 
-u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction *inst, u8 suggested_register) {
+u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction *inst, u8 suggested_register, bool force_use_suggested) {
     if (auto reg = inst->result_stored_in) {
         assert(reg->currently_holding_result_of_instruction == inst);
         return reg->machine_reg;
     } else {
-        reg = get_free_or_suggested_register(function, dataptr, suggested_register, inst);
+        reg = get_free_or_suggested_register(function, dataptr, suggested_register, force_use_suggested, inst);
 
         assert(inst->result_spilled_onto_stack != 0);
         move_memory_to_reg_zero_ext(dataptr, reg->machine_reg, RBP, -inst->result_spilled_onto_stack, inst->value_type->size);
@@ -247,11 +250,11 @@ u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction
 }
 
 
-u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_section, Section *data_section, Value *value, u8 suggested_register = RAX) {
+u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_section, Section *data_section, Value *value, u8 suggested_register = RAX, bool force_use_suggested = false) {
     if (value->type == VALUE_CONSTANT) {
         auto constant = static_cast<Constant *>(value);
 
-        Register *reg = get_free_or_suggested_register(function, &code_section->data, suggested_register, nullptr);
+        Register *reg = get_free_or_suggested_register(function, &code_section->data, suggested_register, force_use_suggested, nullptr);
         reg->is_free = false;
 
         if (constant->constant_type == Constant::STRING) {
@@ -307,7 +310,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
     } else if (value->type == VALUE_BASIC_BLOCK) {
         Basic_Block *block = static_cast<Basic_Block *>(value);
 
-        Register *reg = get_free_or_suggested_register(function, &code_section->data, suggested_register, nullptr);
+        Register *reg = get_free_or_suggested_register(function, &code_section->data, suggested_register, force_use_suggested, nullptr);
         reg->is_free = false;
 
         lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
@@ -320,7 +323,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
         return reg->machine_reg;
     } else if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) {
         auto inst = static_cast<Instruction *>(value);
-        return load_instruction_result(function, &code_section->data, inst, suggested_register);
+        return load_instruction_result(function, &code_section->data, inst, suggested_register, force_use_suggested);
     }
 
     assert(false);
@@ -369,7 +372,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
         case INSTRUCTION_ALLOCA: {
             auto _alloca = static_cast<Instruction_Alloca *>(inst);
 
-            Register *reg = get_free_or_suggested_register(function, &code_section->data, RAX, inst);
+            Register *reg = get_free_or_suggested_register(function, &code_section->data, RAX, false, inst);
 
             assert(_alloca->stack_offset != 0);
             lea_into_reg64(&code_section->data, reg->machine_reg, RBP, -_alloca->stack_offset);
@@ -437,13 +440,22 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             u8 rhs_reg = maybe_get_instruction_register(add->rhs);
 
             if (lhs_reg == 0xFF) lhs_reg = emit_load_of_value(object, function, code_section, data_section, add->lhs, (rhs_reg == RAX) ? RCX : RAX);
-            if (rhs_reg == 0xFF) rhs_reg = emit_load_of_value(object, function, code_section, data_section, add->rhs, (lhs_reg == RAX) ? RCX : RAX);
+
+            Constant *constant = is_constant(add->rhs);
+            if (constant && constant->is_integer()) {
+                Register *reg = function->claim_register(&code_section->data, lhs_reg, inst);
+                if      (inst->type == INSTRUCTION_ADD) add_imm32_to_reg64(&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
+                else if (inst->type == INSTRUCTION_SUB) sub_imm32_from_reg64(&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
+                return 0;
+            } else {
+                if (rhs_reg == 0xFF) rhs_reg = emit_load_of_value(object, function, code_section, data_section, add->rhs, (lhs_reg == RAX) ? RCX : RAX);
+            }
 
             Register *reg = function->claim_register(&code_section->data, lhs_reg, inst);
 
             if      (inst->type == INSTRUCTION_ADD) add_reg64_to_reg64(&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
             else if (inst->type == INSTRUCTION_SUB) sub_reg64_from_reg64(&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
-            return reg->machine_reg;
+            return 0;
         }
 
         case INSTRUCTION_CALL: {
@@ -497,7 +509,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                     }
                 }
 
-                u8 result = emit_load_of_value(object, function, code_section, data_section, p, param_reg);
+                u8 result = emit_load_of_value(object, function, code_section, data_section, p, param_reg, true);
 
                 if (result != param_reg) move_reg64_to_reg64(&code_section->data, result, param_reg);
             }
