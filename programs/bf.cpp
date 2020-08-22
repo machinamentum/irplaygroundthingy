@@ -50,8 +50,6 @@ void gen_bf_instruction(Function *function, Basic_Block *block, Value *data_buff
 
                 gep = make_gep(data_buffer_alloca, add);
                 block->insert(gep);
-
-                block->insert(make_store(add, index_alloca));
                 break;
             }
 
@@ -63,8 +61,6 @@ void gen_bf_instruction(Function *function, Basic_Block *block, Value *data_buff
 
                 gep = make_gep(data_buffer_alloca, sub);
                 block->insert(gep);
-
-                block->insert(make_store(sub, index_alloca));
                 break;
             }
 
@@ -87,6 +83,10 @@ void gen_bf_instruction(Function *function, Basic_Block *block, Value *data_buff
             }
 
             case '[': {
+                // store index value into index_alloca so looping code can load
+                // it back out.
+                block->insert(make_store(load, index_alloca));
+
                 Basic_Block *loop_header = new Basic_Block();
                 function->insert(loop_header);
 
