@@ -70,8 +70,6 @@ u8 get_exponent(u8 i) {
 }
 
 void _single_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 reg, u8 size) {
-    assert(size >= 2);
-
     if (size == 2) dataptr->append_byte(0x66);
     dataptr->append_byte(REX((size == 8) ? 1 : 0, 0, 0, BIT3(reg)));
 
@@ -145,12 +143,19 @@ void move_memory_to_reg(Data_Buffer *dataptr, u8 dst, u8 src, s32 disp, u32 size
     _move_bidrectional(dataptr, dst, src, disp, size, false);
 }
 
-u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 imm, u8 reg) {
-    _single_register_operand_instruction(dataptr, 0xB8, reg, 8);
-    u64 *value = dataptr->allocate_unaligned<u64>();
-    *value = imm;
+u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 value, u8 reg, u32 size = 8) {
+     u8 op = (size == 1) ? 0xB0 : 0xB8;
 
-    return value;
+    _single_register_operand_instruction(dataptr, op, reg, size);
+    
+    u8 *operand = (u8 *)dataptr->allocate_bytes_unaligned(size);
+    
+    if (size == 1) *       operand = static_cast<u8> (value);
+    if (size == 2) *(u16 *)operand = static_cast<u16>(value);
+    if (size == 4) *(u32 *)operand = static_cast<u32>(value);
+    if (size == 8) *(u64 *)operand = value;
+
+    return (u64 *)operand;
 }
 
 void move_imm32_to_memory(Data_Buffer *dataptr, u32 value, u8 dst, s32 disp, u32 size) {
@@ -391,7 +396,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
 
             // if (_register != RAX) move_reg64_to_reg64(&code_section->data, RAX, _register);
         } else if (constant->constant_type == Constant::INTEGER) {
-            move_imm64_to_reg64(&code_section->data, constant->integer_value, reg->machine_reg);
+            move_imm64_to_reg64(&code_section->data, constant->integer_value, reg->machine_reg, constant->value_type->size);
         }
 
         return reg->machine_reg;
@@ -556,7 +561,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             Constant *constant = is_constant(add->rhs);
             if (constant && constant->is_integer()) {
                 Register *reg = function->claim_register(&code_section->data, lhs_reg, inst);
-                if      (inst->type == INSTRUCTION_ADD) add_imm32_to_reg64(&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
+                if      (inst->type == INSTRUCTION_ADD) add_imm32_to_reg64  (&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
                 else if (inst->type == INSTRUCTION_SUB) sub_imm32_from_reg64(&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
                 return 0;
             }
@@ -633,10 +638,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             if (object->target.is_system_v()) {
                 // load number of floating point parameters into %al
-                code_section->data.append_byte(REX(1, 0, 0, 0));
-                code_section->data.append_byte(0xB8 + RAX);
-                u64 *value = code_section->data.allocate_unaligned<u64>();
-                *value = 0;
+                move_imm64_to_reg64(&code_section->data, 0, RAX, 1);
             }
 
             if (object->use_absolute_addressing) {
