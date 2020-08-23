@@ -8,6 +8,7 @@
 #include <assert.h>
 
 #include <new>
+#include <initializer_list>
 
 typedef uint64_t u64;
 typedef uint32_t u32;
@@ -74,6 +75,58 @@ struct Array {
     }
 
     T *end() {
+        if (count) return &data[count];
+        return nullptr;
+    }
+};
+
+#include <stdio.h>
+
+template <typename T>
+struct Array_Slice {
+    bool list_initialized = false;
+    T *data;
+    size_t count;
+
+    Array_Slice() {
+        list_initialized = false;
+        data = nullptr;
+        count = 0;
+    }
+
+    Array_Slice(const Array_Slice<T> &other) {
+        list_initialized = false;
+        data = other.data;
+        count = other.count;
+    }
+
+    Array_Slice(const Array<T> &a) {
+        list_initialized = false;
+        data  = a.data;
+        count = a.count;
+    }
+
+    Array_Slice(std::initializer_list<T> list) {
+        count = list.size();
+        data = (T *)malloc(sizeof(T) * count);
+
+        memcpy(data, list.begin(), sizeof(T) * count);
+
+        list_initialized = true;
+    }
+
+    ~Array_Slice() {
+        if (list_initialized && data) free(data);
+
+        data  = nullptr;
+        count = 0;
+    }
+
+    T *begin() const {
+        return &data[0];
+    }
+
+    T *end() const {
         if (count) return &data[count];
         return nullptr;
     }

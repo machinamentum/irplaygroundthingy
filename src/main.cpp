@@ -20,50 +20,60 @@ void old_test() {
     Function *main_func = new Function();
     main_func->name = "main";
 
-    Basic_Block *block = new Basic_Block();
-    main_func->blocks.add(block);
+    Function *debugbreak = new Function();
+    debugbreak->intrinsic_id = Function::DEBUG_BREAK;
+    debugbreak->value_type = make_func_type(make_void_type());
 
-    Instruction_Alloca *_alloca = make_alloca(make_integer_type(8));
-    block->instructions.add(_alloca);
-    block->instructions.add(make_store(make_integer_constant(10), _alloca));
+    Basic_Block *block = new Basic_Block();
+    main_func->insert(block);
+
+    IR_Manager *irm = new IR_Manager();
+    irm->set_block(block);
+
+    auto _alloca = irm->insert_alloca(irm->i8);
+    irm->insert_store(make_integer_constant(10), _alloca);
+
+    {
+        auto load = irm->insert_load(_alloca);
+        auto mul = irm->insert_mul(load, make_integer_constant(2, irm->i8));
+        irm->insert_store(mul, _alloca);
+    }
 
     {
         Basic_Block *loop_header = new Basic_Block();
-        main_func->blocks.add(loop_header);
+        main_func->insert(loop_header);
 
         Basic_Block *loop_body = new Basic_Block();
-        main_func->blocks.add(loop_body);
+        main_func->insert(loop_body);
 
         Basic_Block *loop_exit = new Basic_Block();
-        main_func->blocks.add(loop_exit);
+        main_func->insert(loop_exit);
 
-        block->instructions.add(make_branch(nullptr, loop_header));
+        irm->insert_branch(loop_header);
 
-        Instruction_Load *load = make_load(_alloca);
-        loop_header->instructions.add(load);
+        irm->set_block(loop_header);
 
-        Instruction_Sub *add = make_sub(load, make_integer_constant(1));
-        loop_header->instructions.add(add);
+        auto load = irm->insert_load(_alloca);
+        auto sub = irm->insert_sub(load, make_integer_constant(1, irm->i8));
+        irm->insert_store(sub, _alloca);
+        irm->insert_branch(load, loop_body, loop_exit);
 
-        loop_header->instructions.add(make_store(add, _alloca));
+        irm->set_block(loop_body);
 
-        loop_header->instructions.add(make_branch(load, loop_body, loop_exit));
+        irm->insert_call(printf_func, {make_string_constant("Hello World: %d\n"), load});
 
-        Instruction_Call *call = make_call(printf_func);
-        call->parameters.add(make_string_constant("Hello World: %d\n"));
-        call->parameters.add(load);
+        // irm->insert_call(debugbreak);
 
-        loop_body->instructions.add(call);
+        irm->insert_branch(loop_header);
 
-        loop_body->instructions.add(make_branch(nullptr, loop_header));
-
-        loop_exit->instructions.add(new Instruction_Return());
+        irm->set_block(loop_exit);
+        irm->insert_return();
     }
     
     unit.functions.add(printf_func);
     unit.functions.add(main_func);
 
 
-    emit_obj_file(&unit);
-    // do_jit_and_run_program_main(&unit);
+    // emit_obj_file(&unit);
+    do_jit_and_run_program_main(&unit);
 }

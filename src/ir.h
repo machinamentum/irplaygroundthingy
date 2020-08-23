@@ -21,6 +21,8 @@ enum {
     INSTRUCTION_LOAD,
     INSTRUCTION_ADD,
     INSTRUCTION_SUB,
+    INSTRUCTION_MUL,
+    INSTRUCTION_,
     INSTRUCTION_GEP,
     INSTRUCTION_BRANCH,
 
@@ -115,11 +117,13 @@ Constant *make_string_constant(String value) {
 }
 
 inline
-Constant *make_integer_constant(u64 value) {
+Constant *make_integer_constant(u64 value, Type *value_type = make_integer_type(8)) {
     Constant *con = new Constant();
     con->constant_type = Constant::INTEGER;
     con->integer_value = value;
-    con->value_type = make_integer_type(8);
+    con->value_type = value_type;
+
+    assert(value_type->type == Type::INTEGER);
     return con;
 }
 
@@ -185,6 +189,10 @@ struct Instruction_Sub : Instruction_Math_Binary_Op {
     Instruction_Sub() { type = INSTRUCTION_SUB; }
 };
 
+struct Instruction_Mul : Instruction_Math_Binary_Op {
+    Instruction_Mul() { type = INSTRUCTION_MUL; }
+};
+
 struct Instruction_GEP : Instruction {
     Instruction_GEP() { type = INSTRUCTION_GEP; }
 
@@ -199,72 +207,6 @@ struct Instruction_Branch : Instruction {
     Value *true_target    = nullptr;
     Value *failure_target = nullptr;
 };
-
-inline
-Instruction_Branch *make_branch(Value *condition_or_null, Value *true_target, Value *failure_target = nullptr) {
-    Instruction_Branch *branch = new Instruction_Branch();
-    branch->condition      = condition_or_null;
-    branch->true_target    = true_target;
-    branch->failure_target = failure_target;
-    return branch;
-}
-
-inline
-Instruction_GEP *make_gep(Value *pointer_value, Value *index) {
-    Instruction_GEP *gep = new Instruction_GEP();
-    gep->pointer_value = pointer_value;
-    gep->index         = index;
-    gep->value_type = pointer_value->value_type;
-    return gep;
-}
-
-inline
-Instruction_Add *make_add(Value *lhs, Value *rhs) {
-    // @Incomplete assert that lhs and rhs types match
-    Instruction_Add *add = new Instruction_Add();
-    add->value_type = lhs->value_type;
-    add->lhs = lhs;
-    add->rhs = rhs;
-    add->value_type = lhs->value_type;
-    return add;
-}
-
-inline
-Instruction_Sub *make_sub(Value *lhs, Value *rhs) {
-    // @Incomplete assert that lhs and rhs types match
-    Instruction_Sub *sub = new Instruction_Sub();
-    sub->value_type = lhs->value_type;
-    sub->lhs = lhs;
-    sub->rhs = rhs;
-    sub->value_type = lhs->value_type;
-    return sub;
-}
-
-inline
-Instruction_Load *make_load(Value *pointer_value) {
-    assert(pointer_value->value_type->type == Type::POINTER);
-    Instruction_Load *load = new Instruction_Load();
-    load->pointer_value = pointer_value;
-    load->value_type    = pointer_value->value_type->pointer_to;
-    return load;
-}
-
-inline
-Instruction_Store *make_store(Value *source_value, Value *store_target) {
-    Instruction_Store *store = new Instruction_Store();
-    store->source_value = source_value;
-    store->store_target = store_target;
-    return store;
-}
-
-inline
-Instruction_Alloca *make_alloca(Type *alloca_type, u32 array_size = 1) {
-    Instruction_Alloca *_alloca = new Instruction_Alloca();
-    _alloca->alloca_type = alloca_type;
-    _alloca->value_type = make_pointer_type(alloca_type);
-    _alloca->array_size = array_size;
-    return _alloca;
-}
 
 struct Basic_Block : Value {
     Basic_Block() { type = VALUE_BASIC_BLOCK; }
@@ -302,6 +244,12 @@ struct Global_Value : Constant {
 
 
 struct Function : Global_Value {
+    enum Intrinsics {
+        NOT_INTRINSIC,
+        DEBUG_BREAK,
+    };
+    u32 intrinsic_id = NOT_INTRINSIC;
+
     Array<Type *> parameter_types;
     Array<Basic_Block *> blocks;
 
@@ -355,14 +303,105 @@ struct Compilation_Unit {
     Array<Function *> functions;
 };
 
+
+
+inline
+Instruction_Branch *make_branch(Value *condition_or_null, Value *true_target, Value *failure_target = nullptr) {
+    Instruction_Branch *branch = new Instruction_Branch();
+    branch->condition      = condition_or_null;
+    branch->true_target    = true_target;
+    branch->failure_target = failure_target;
+    return branch;
+}
+
+inline
+Instruction_GEP *make_gep(Value *pointer_value, Value *index) {
+    Instruction_GEP *gep = new Instruction_GEP();
+    gep->pointer_value = pointer_value;
+    gep->index         = index;
+    gep->value_type = pointer_value->value_type;
+    return gep;
+}
+
+inline
+Instruction_Add *make_add(Value *lhs, Value *rhs) {
+    // @Incomplete assert that lhs and rhs types match
+    Instruction_Add *add = new Instruction_Add();
+    add->value_type = lhs->value_type;
+    add->lhs = lhs;
+    add->rhs = rhs;
+    add->value_type = lhs->value_type;
+    return add;
+}
+
+inline
+Instruction_Sub *make_sub(Value *lhs, Value *rhs) {
+    // @Incomplete assert that lhs and rhs types match
+    Instruction_Sub *sub = new Instruction_Sub();
+    sub->value_type = lhs->value_type;
+    sub->lhs = lhs;
+    sub->rhs = rhs;
+    sub->value_type = lhs->value_type;
+    return sub;
+}
+
+inline
+Instruction_Mul *make_mul(Value *lhs, Value *rhs) {
+    // @Incomplete assert that lhs and rhs types match
+    Instruction_Mul *sub = new Instruction_Mul();
+    sub->value_type = lhs->value_type;
+    sub->lhs = lhs;
+    sub->rhs = rhs;
+    sub->value_type = lhs->value_type;
+    return sub;
+}
+
+
+inline
+Instruction_Load *make_load(Value *pointer_value) {
+    assert(pointer_value->value_type->type == Type::POINTER);
+    Instruction_Load *load = new Instruction_Load();
+    load->pointer_value = pointer_value;
+    load->value_type    = pointer_value->value_type->pointer_to;
+    return load;
+}
+
+inline
+Instruction_Store *make_store(Value *source_value, Value *store_target) {
+    Instruction_Store *store = new Instruction_Store();
+    store->source_value = source_value;
+    store->store_target = store_target;
+    return store;
+}
+
+inline
+Instruction_Alloca *make_alloca(Type *alloca_type, u32 array_size = 1) {
+    Instruction_Alloca *_alloca = new Instruction_Alloca();
+    _alloca->alloca_type = alloca_type;
+    _alloca->value_type = make_pointer_type(alloca_type);
+    _alloca->array_size = array_size;
+    return _alloca;
+}
+
+
 // @TODO parameter types
 inline
-Instruction_Call *make_call(Function *func) {
+Instruction_Call *make_call(Function *func, const Array_Slice<Value *> &parameters = Array_Slice<Value *>()) {
     assert(func->value_type && func->value_type->type == Type::FUNCTION);
     Instruction_Call *call = new Instruction_Call();
     call->call_target = func;
     call->value_type = func->value_type->result_type;
+
+    for (const auto v : parameters) {
+        call->parameters.add(v);
+    }
     return call;
+}
+
+inline
+Instruction_Return *make_return(Value *retval = nullptr) {
+    Instruction_Return *ret = new Instruction_Return();
+    return ret;
 }
 
 inline
@@ -376,6 +415,84 @@ Instruction *is_instruction(Value *value) {
 
     return nullptr;
 }
+
+struct IR_Manager {
+    Type *i8;
+    Type *i16;
+    Type *i32;
+    Type *i64;
+
+    Basic_Block *block = nullptr;
+
+    IR_Manager() {
+        i8  = make_integer_type(1);
+        i16 = make_integer_type(2);
+        i32 = make_integer_type(4);
+        i64 = make_integer_type(8);
+    }
+
+    void set_block(Basic_Block *block) {
+        this->block = block;
+    }
+
+    Instruction_Alloca *insert_alloca(Type *alloca_type, u32 array_size = 1) {
+        auto _alloca = make_alloca(alloca_type, array_size);
+        block->insert(_alloca);
+        return _alloca;
+    }
+
+    Instruction_Load *insert_load(Value *pointer_value) {
+        auto load = make_load(pointer_value);
+        block->insert(load);
+        return load;
+    }
+
+    Instruction_Store *insert_store(Value *source_value, Value *store_target) {
+        auto store = make_store(source_value, store_target);
+        block->insert(store);
+        return store;
+    }
+
+    Instruction_Add *insert_add(Value *lhs, Value *rhs) {
+        auto add = make_add(lhs, rhs);
+        block->insert(add);
+        return add;
+    }
+
+    Instruction_Sub *insert_sub(Value *lhs, Value *rhs) {
+        auto sub = make_sub(lhs, rhs);
+        block->insert(sub);
+        return sub;
+    }
+
+    Instruction_Mul *insert_mul(Value *lhs, Value *rhs) {
+        auto mul = make_mul(lhs, rhs);
+        block->insert(mul);
+        return mul;
+    }
+
+    Instruction_Branch *insert_branch(Value *condition_or_null, Value *true_target, Value *failure_target = nullptr) {
+        auto br = make_branch(condition_or_null, true_target, failure_target);
+        block->insert(br);
+        return br;
+    }
+
+    Instruction_Branch *insert_branch(Value *target) {
+        return insert_branch(nullptr, target, nullptr);
+    }
+
+    Instruction_Call *insert_call(Function *func, const Array_Slice<Value *> &parameters = Array_Slice<Value *>()) {
+        auto call = make_call(func, parameters);
+        block->insert(call);
+        return call;
+    }
+
+    Instruction_Return *insert_return(Value *retval = nullptr) {
+        auto ret = make_return(retval);
+        block->insert(ret);
+        return ret;
+    }
+};
 
 
 #endif

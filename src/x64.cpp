@@ -69,7 +69,7 @@ u8 get_exponent(u8 i) {
     return shift;
 }
 
-void _single_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 reg, u8 size) {
+void _single_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 reg, u32 size) {
     if (size == 2) dataptr->append_byte(0x66);
     dataptr->append_byte(REX((size == 8) ? 1 : 0, 0, 0, BIT3(reg)));
 
@@ -248,17 +248,23 @@ u32 *add_imm32_to_reg64(Data_Buffer *dataptr, u8 reg, u32 value, u32 size) {
 }
 
 void imul_reg64_with_imm32(Data_Buffer *dataptr, u8 reg, u32 value, u32 size) {
-    assert(size == 4 || size == 8);
+    if (size < 2) size = 2; // @FixMe maybe, imul in this form does not support 1-byte multiplication
 
     u8 op = 0x69;
     _two_register_operand_instruction(dataptr, op, 0x3, reg, addr_register_disp(reg), size);
 
     if (size > 4) size = 4;
     u8 *operand = (u8 *)dataptr->allocate_bytes_unaligned(size);
-    
-    if (size == 1) *       operand = static_cast<u8> (value);
+
     if (size == 2) *(u16 *)operand = static_cast<u16>(value);
     if (size == 4 || size == 8) *(u32 *)operand = value;
+}
+
+void imul_reg64_with_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
+    if (size < 2) size = 2; // @FixMe maybe, imul in this form does not support 1-byte multiplication
+
+    u8 op = 0xAF;
+    _two_register_operand_instruction(dataptr, op, 0x3, src, addr_register_disp(dst), size, true);
 }
 
 void add_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
@@ -269,6 +275,10 @@ void add_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
 void sub_reg64_from_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     u8 op = (size == 1) ? 0x28 : 0x29;
     _two_register_operand_instruction(dataptr, op, 0x3, src, addr_register_disp(dst), size);
+}
+
+void debugbreak(Data_Buffer *dataptr) {
+    dataptr->append_byte(0xCC);
 }
 
 void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
@@ -549,8 +559,9 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             return 0;
         }
 
+        case INSTRUCTION_ADD:
         case INSTRUCTION_SUB:
-        case INSTRUCTION_ADD: {
+        case INSTRUCTION_MUL: {
             auto add = static_cast<Instruction_Add *>(inst);
 
             u8 lhs_reg = maybe_get_instruction_register(add->lhs);
@@ -561,8 +572,9 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             Constant *constant = is_constant(add->rhs);
             if (constant && constant->is_integer()) {
                 Register *reg = function->claim_register(&code_section->data, lhs_reg, inst);
-                if      (inst->type == INSTRUCTION_ADD) add_imm32_to_reg64  (&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
-                else if (inst->type == INSTRUCTION_SUB) sub_imm32_from_reg64(&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
+                if      (inst->type == INSTRUCTION_ADD) add_imm32_to_reg64   (&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
+                else if (inst->type == INSTRUCTION_SUB) sub_imm32_from_reg64 (&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
+                else if (inst->type == INSTRUCTION_MUL) imul_reg64_with_imm32(&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
                 return 0;
             }
 
@@ -570,13 +582,29 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             Register *reg = function->claim_register(&code_section->data, lhs_reg, inst);
 
-            if      (inst->type == INSTRUCTION_ADD) add_reg64_to_reg64(&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
-            else if (inst->type == INSTRUCTION_SUB) sub_reg64_from_reg64(&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
+            if      (inst->type == INSTRUCTION_ADD) add_reg64_to_reg64   (&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
+            else if (inst->type == INSTRUCTION_SUB) sub_reg64_from_reg64 (&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
+            else if (inst->type == INSTRUCTION_MUL) imul_reg64_with_reg64(&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
             return 0;
         }
 
         case INSTRUCTION_CALL: {
             auto call = static_cast<Instruction_Call *>(inst);
+            auto function_target = static_cast<Function *>(call->call_target);
+
+            if (function_target->intrinsic_id) {
+                switch (function_target->intrinsic_id) {
+                    case Function::NOT_INTRINSIC:
+                        assert(false);
+                        break;
+                    case Function::DEBUG_BREAK:
+                        debugbreak(&code_section->data);
+                        break;
+                }
+
+                return 0;
+            }
+
 
             if (object->target.is_win32()) {
                 // shadow space for the callee to spill registers...
