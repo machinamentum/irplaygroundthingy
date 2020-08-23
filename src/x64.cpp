@@ -2,6 +2,8 @@
 #include "linker_object.h"
 #include "ir.h"
 
+#include <stdio.h>
+
 const u8 RAX = 0;
 const u8 RCX = 1;
 const u8 RDX = 2;
@@ -20,16 +22,52 @@ T ensure_aligned(T value, T alignment) {
     return value;
 }
 
+template <typename T, typename B>
+bool fits_into(B b) {
+    T a = (T)b;
+    return ((B)a) == b;
+}
+
+struct Address_Info {
+    u8 machine_reg = 0xFF;
+    s32 disp       = 0;
+
+    u8 base_reg    = 0xFF;
+    u8 index_reg   = 0xFF; // if index_reg != 0xFF then we use SIB
+    u8 scale       = 1;    // must be 1, 2, 4, or 8
+};
+
+Address_Info addr_register_disp(u8 machine_reg, s32 disp = 0) {
+    Address_Info info;
+    info.machine_reg = machine_reg;
+    info.disp        = disp;
+    return info;
+}
+
 // This magic is best explained on OSDev https://wiki.osdev.org/X86-64_Instruction_Encoding
 // REX prefixes the instruction, ModRM seems to post-fix the instruction but before data operands,
 // and both seem to be optional... and the processor magically understands these things and parses
 // instructions correctly ????
 #define REX(W, R, X, B) ((u8)(0x40 | ((W) << 3) | ((R) << 2) | ((X) << 1) | (B)))
 #define ModRM(mod, reg, rm) ((u8)(((mod) << 6) | ((reg) << 3) | (rm)))
-#define SIB(scale, index, base) ((u8)(((scale) << 5) | ((index) << 3) | (base)))
+#define SIB(scale, index, base) ((u8)(((scale) << 6) | ((index) << 3) | (base)))
 
 #define BIT3(v) ((v & (1 << 3)) >> 3)
 #define LOW3(v) (v & 0x7)
+
+// Despite the name, if RBP or R14 (LOW3() bits are 0b101)
+// then there is a 32-bit displacement anyways.
+const u8 MOD_INDIRECT_NO_DISP    = 0x0;
+const u8 MOD_INDIRECT_8BIT_DISP  = 0x1;
+const u8 MOD_INDIRECT_32BIT_DISP = 0x2;
+const u8 MOD_DIRECT              = 0x3;
+
+static
+u8 get_exponent(u8 i) {
+    u8 shift = 0;
+    while (!((i >> shift) & 1)) shift += 1;
+    return shift;
+}
 
 void _single_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 reg, u8 size) {
     assert(size >= 2);
@@ -40,26 +78,63 @@ void _single_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 re
     dataptr->append_byte(opcode + LOW3(reg));
 }
 
-void _two_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 mod, u8 operand1, u8 operand2, u32 size, bool _0F_op = false) {
+s32 *_two_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 mod, u8 operand1, Address_Info operand2, u32 size, bool _0F_op = false) {
     if (size == 2) dataptr->append_byte(0x66);
-    dataptr->append_byte(REX((size == 8) ? 1 : 0, BIT3(operand1), 0, BIT3(operand2)));
+
+    u8 op2_reg = operand2.machine_reg;
+    u8 index_reg = 0;
+    if (mod != 0x3 && LOW3(op2_reg) == RSP) {
+        op2_reg   = operand2.base_reg;
+        index_reg = operand2.index_reg;
+
+        assert(!(op2_reg >= RSP && op2_reg <= R9));
+    }
+
+    dataptr->append_byte(REX((size == 8) ? 1 : 0, BIT3(operand1), BIT3(index_reg), BIT3(op2_reg)));
 
     if (_0F_op) dataptr->append_byte(0x0F);
     dataptr->append_byte(opcode);
-    dataptr->append_byte(ModRM(mod, LOW3(operand1), LOW3(operand2)));
+    dataptr->append_byte(ModRM(mod, LOW3(operand1), LOW3(operand2.machine_reg)));
+
+    if (mod != 0x3 && LOW3(operand2.machine_reg) == RSP) {
+        if (mod == MOD_INDIRECT_NO_DISP) assert(LOW3(op2_reg) != RBP);
+
+        u8 scale = get_exponent(operand2.scale);
+        assert(scale <= 0x3);
+        dataptr->append_byte(SIB(scale, LOW3(index_reg), LOW3(op2_reg)));
+    }
+
+    if (mod == MOD_INDIRECT_8BIT_DISP) {
+        s8 *disp = dataptr->allocate_unaligned<s8>();
+        *disp = operand2.disp; // @TODO ensure this fits
+        return nullptr;
+    }
+
+    if (mod == MOD_INDIRECT_32BIT_DISP || (mod == MOD_INDIRECT_NO_DISP && LOW3(op2_reg) == RBP)) {
+        s32 *disp = dataptr->allocate_unaligned<s32>();
+        *disp = operand2.disp;
+        return disp;
+    }
+
+    return nullptr;
 }
 
 void _move_bidrectional(Data_Buffer *dataptr, u8 value_reg, u8 ptrbase, s32 disp, u32 size, bool to_memory) {
     u8 op = (size == 1) ? 0x88 : 0x89;
     if (!to_memory) op += 0x02;
 
-    _two_register_operand_instruction(dataptr, op, 0x2, value_reg, ptrbase, size);
-    s32 *value = (s32  *)dataptr->allocate_unaligned<s32>();
-    *value = disp;
+    u8 mod = MOD_INDIRECT_32BIT_DISP;
+    if      (disp == 0) mod = MOD_INDIRECT_NO_DISP;
+    else if (fits_into<s8>(disp)) {
+        mod = MOD_INDIRECT_8BIT_DISP;
+        disp = (s8) disp;
+    }
+
+    _two_register_operand_instruction(dataptr, op, mod, value_reg, addr_register_disp(ptrbase, disp), size);
 }
 
 void move_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst) {
-    _two_register_operand_instruction(dataptr, 0x8B, 0x3, dst, src, 8);
+    _two_register_operand_instruction(dataptr, 0x8B, 0x3, dst, addr_register_disp(src), 8);
 }
 
 void move_reg_to_memory(Data_Buffer *dataptr, u8 src, u8 dst, s32 disp, u32 size) {
@@ -80,10 +155,15 @@ u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 imm, u8 reg) {
 
 void move_imm32_to_memory(Data_Buffer *dataptr, u32 value, u8 dst, s32 disp, u32 size) {
     u8 op = (size == 1) ? 0xC6 : 0xC7;
-    _two_register_operand_instruction(dataptr, op, 0x2, RAX, dst, size);
-    s32 *offset = dataptr->allocate_unaligned<s32>();
-    *offset = disp;
 
+    u8 mod = MOD_INDIRECT_32BIT_DISP;
+    if      (disp == 0) mod = MOD_INDIRECT_NO_DISP;
+    else if (fits_into<s8>(disp)) {
+        mod = MOD_INDIRECT_8BIT_DISP;
+        disp = (s8) disp;
+    }
+
+    _two_register_operand_instruction(dataptr, op, mod, RAX, addr_register_disp(dst, disp), size);
 
     if (size > 4) size = 4;
     u8 *operand = (u8 *)dataptr->allocate_bytes_unaligned(size);
@@ -97,25 +177,36 @@ void move_memory_to_reg_zero_ext(Data_Buffer *dataptr, u8 value_reg, u8 ptrbase,
     if (size <= 2) {
         u8 op = (size == 1) ? 0xB6 : 0xB7;
 
+        u8 mod = MOD_INDIRECT_32BIT_DISP;
+        if      (disp == 0) mod = MOD_INDIRECT_NO_DISP;
+        else if (fits_into<s8>(disp)) {
+            mod = MOD_INDIRECT_8BIT_DISP;
+            disp = (s8) disp;
+        }
+
         size = 4; // always load into 32-bit register
-        _two_register_operand_instruction(dataptr, op, 0x2, value_reg, ptrbase, size, true);
-        s32 *value = dataptr->allocate_unaligned<s32>();
-        *value = disp;
+        _two_register_operand_instruction(dataptr, op, mod, value_reg, addr_register_disp(ptrbase, disp), size, true);
     } else {
         move_memory_to_reg(dataptr, value_reg, ptrbase, disp, size);
     }
 }
 
 // Need to allocate 4 bytes of space after this call
-void lea_rip_relative_into_reg64(Data_Buffer *dataptr, u8 reg) {
-    _two_register_operand_instruction(dataptr, 0x8D, 0, reg, 0x5, 8);
+s32 *lea_rip_relative_into_reg64(Data_Buffer *dataptr, u8 reg) {
+    return _two_register_operand_instruction(dataptr, 0x8D, MOD_INDIRECT_NO_DISP, reg, addr_register_disp(RBP), 8);
 }
 
-void lea_into_reg64(Data_Buffer *dataptr, u8 dst, u8 src, s32 disp) {
-    _two_register_operand_instruction(dataptr, 0x8D, 0x2, dst, src, 8);
+void lea_into_reg64(Data_Buffer *dataptr, u8 dst, Address_Info source) {
+    s32 disp = source.disp;
 
-    s32 *value = dataptr->allocate_unaligned<s32>();
-    *value = disp;
+    u8 mod = MOD_INDIRECT_32BIT_DISP;
+    if      (disp == 0) mod = MOD_INDIRECT_NO_DISP;
+    else if (fits_into<s8>(disp)) {
+        mod = MOD_INDIRECT_8BIT_DISP;
+        disp = (s8) disp;
+    }
+
+    _two_register_operand_instruction(dataptr, 0x8D, mod, dst, source, 8);
 }
 
 void pop_reg64(Data_Buffer *dataptr, u8 reg, u8 size = 8) {
@@ -128,7 +219,7 @@ void push_reg64(Data_Buffer *dataptr, u8 reg, u8 size = 8) {
 
 u32 *_mathop_imm32_reg64(Data_Buffer *dataptr, u8 reg, u32 value, u32 size, u8 op_select) {
     u8 op = (size == 1) ? 0x80 : 0x81;
-    _two_register_operand_instruction(dataptr, op, 0x3, op_select, reg, size);
+    _two_register_operand_instruction(dataptr, op, 0x3, op_select, addr_register_disp(reg), size);
 
     if (size > 4) size = 4;
     u8 *operand = (u8 *)dataptr->allocate_bytes_unaligned(size);
@@ -155,7 +246,7 @@ void imul_reg64_with_imm32(Data_Buffer *dataptr, u8 reg, u32 value, u32 size) {
     assert(size == 4 || size == 8);
 
     u8 op = 0x69;
-    _two_register_operand_instruction(dataptr, op, 0x3, reg, reg, size);
+    _two_register_operand_instruction(dataptr, op, 0x3, reg, addr_register_disp(reg), size);
 
     if (size > 4) size = 4;
     u8 *operand = (u8 *)dataptr->allocate_bytes_unaligned(size);
@@ -167,12 +258,12 @@ void imul_reg64_with_imm32(Data_Buffer *dataptr, u8 reg, u32 value, u32 size) {
 
 void add_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     u8 op = (size == 1) ? 0x00 : 0x01;
-    _two_register_operand_instruction(dataptr, op, 0x3, src, dst, size);
+    _two_register_operand_instruction(dataptr, op, 0x3, src, addr_register_disp(dst), size);
 }
 
 void sub_reg64_from_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     u8 op = (size == 1) ? 0x28 : 0x29;
-    _two_register_operand_instruction(dataptr, op, 0x3, src, dst, size);
+    _two_register_operand_instruction(dataptr, op, 0x3, src, addr_register_disp(dst), size);
 }
 
 void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
@@ -291,14 +382,11 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
                 reloc.is_rip_relative = true;
-                reloc.offset = code_section->data.size();
+                reloc.offset = code_section->data.size() - 4;
                 reloc.symbol_index = data_section->symbol_index;
                 reloc.size = 4;
 
                 code_section->relocations.add(reloc);
-
-                u32 *value = code_section->data.allocate_unaligned<u32>();
-                *value = data_sec_offset;
             }
 
             // if (_register != RAX) move_reg64_to_reg64(&code_section->data, RAX, _register);
@@ -313,13 +401,12 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
         Register *reg = get_free_or_suggested_register(function, &code_section->data, suggested_register, force_use_suggested, nullptr);
         reg->is_free = false;
 
-        lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
+        s32 *value = lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
 
-        auto offset = code_section->data.size();
+        auto offset = code_section->data.size() - 4;
         block->text_locations_needing_addr_fixup.add(offset);
 
-        u32 *value = code_section->data.allocate_unaligned<u32>();
-        block->text_ptrs_for_fixup.add(value);
+        block->text_ptrs_for_fixup.add((u32 *)value);
         return reg->machine_reg;
     } else if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) {
         auto inst = static_cast<Instruction *>(value);
@@ -330,22 +417,15 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
     return 0;
 }
 
-struct Address_Info {
-    u8 machine_reg;
-    s32 disp;
-};
-
 Address_Info get_address_value_of_pointer(Linker_Object *object, Function *function, Section *code_section, Section *data_section, Value *value, u8 suggested_register = RAX) {
     assert(value->value_type->type == Type::POINTER);
 
     if (value->type == INSTRUCTION_ALLOCA) {
         auto _alloca = static_cast<Instruction_Alloca *>(value);
-        return { RBP, -_alloca->stack_offset };
+        return addr_register_disp(RBP, -_alloca->stack_offset);
     } else {
-        Address_Info info;
-        info.machine_reg = emit_load_of_value(object, function, code_section, data_section, value, suggested_register);
-        info.disp = 0;
-        return info;
+        u8 machine_reg = emit_load_of_value(object, function, code_section, data_section, value, suggested_register);
+        return addr_register_disp(machine_reg);
     }
 }
 
@@ -375,7 +455,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             Register *reg = get_free_or_suggested_register(function, &code_section->data, RAX, false, inst);
 
             assert(_alloca->stack_offset != 0);
-            lea_into_reg64(&code_section->data, reg->machine_reg, RBP, -_alloca->stack_offset);
+            lea_into_reg64(&code_section->data, reg->machine_reg, addr_register_disp(RBP, -_alloca->stack_offset));
             return reg->machine_reg;
         }
 
@@ -419,17 +499,49 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             u8 source = maybe_get_instruction_register(gep->pointer_value);
             u8 target = maybe_get_instruction_register(gep->index);
 
-            if (target == 0xFF) target = emit_load_of_value(object, function, code_section, data_section, gep->index,         (source == RAX) ? RCX : RAX);
             if (source == 0xFF) source = emit_load_of_value(object, function, code_section, data_section, gep->pointer_value, (target == RAX) ? RCX : RAX);
+            if (target == 0xFF) target = emit_load_of_value(object, function, code_section, data_section, gep->index,         (source == RAX) ? RCX : RAX);
 
             assert(source != target);
 
             Register *reg = function->claim_register(&code_section->data, target, inst);
-            if (gep->pointer_value->value_type->pointer_to->size > 1)
-                imul_reg64_with_imm32(&code_section->data, reg->machine_reg, gep->pointer_value->value_type->pointer_to->size, 8);
 
-            add_reg64_to_reg64(&code_section->data, source, reg->machine_reg, gep->value_type->size);
-            return reg->machine_reg;
+            u32 size = gep->pointer_value->value_type->pointer_to->size;
+
+            if (size > 1 && size <= 8) {
+                // SIB indexing only supporting
+                // the [base + (index * scale)] mode right now
+                // So find a register that we can move the base into..
+                if (!(target <= RBX)) {
+                    for (u8 i = 0; i < RBX; ++i) {
+                        Register *reg = &function->register_usage[i];
+
+                        if (reg->machine_reg != target) {
+                            maybe_spill_register(function, &code_section->data, reg);
+                            move_reg64_to_reg64(&code_section->data, target, reg->machine_reg);
+                            target = reg->machine_reg;
+                            break;
+                        }
+                    }
+                }
+
+                Address_Info info;
+                info.machine_reg = RSP; // SIB
+                info.disp        = 0;
+                info.base_reg    = source;
+                info.index_reg   = target;
+                info.scale       = (u8) size;
+
+                lea_into_reg64(&code_section->data, reg->machine_reg, info);
+            } else {
+                if (size > 1)
+                    imul_reg64_with_imm32(&code_section->data, reg->machine_reg, gep->pointer_value->value_type->pointer_to->size, 8);
+
+                add_reg64_to_reg64(&code_section->data, source, reg->machine_reg, gep->value_type->size);
+            }
+
+
+            return 0;
         }
 
         case INSTRUCTION_SUB:
@@ -447,9 +559,9 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 if      (inst->type == INSTRUCTION_ADD) add_imm32_to_reg64(&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
                 else if (inst->type == INSTRUCTION_SUB) sub_imm32_from_reg64(&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
                 return 0;
-            } else {
-                if (rhs_reg == 0xFF) rhs_reg = emit_load_of_value(object, function, code_section, data_section, add->rhs, (lhs_reg == RAX) ? RCX : RAX);
             }
+
+            if (rhs_reg == 0xFF) rhs_reg = emit_load_of_value(object, function, code_section, data_section, add->rhs, (lhs_reg == RAX) ? RCX : RAX);
 
             Register *reg = function->claim_register(&code_section->data, lhs_reg, inst);
 
@@ -752,7 +864,7 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
         dataptr->append_byte(REX(1, BIT3(RAX), 0, BIT3(RSP)));
 
         dataptr->append_byte(0x89);
-        dataptr->append_byte(ModRM(0x0, LOW3(RAX), LOW3(RSP)));
+        dataptr->append_byte(ModRM(MOD_INDIRECT_NO_DISP, LOW3(RAX), LOW3(RSP)));
         dataptr->append_byte(SIB(0, RAX, RSP));
 
         code_section->data.append_byte(0x0F);
