@@ -492,6 +492,12 @@ struct IR_Manager {
         block->insert(ret);
         return ret;
     }
+
+    Instruction_GEP *insert_gep(Value *pointer_value, Value *index) {
+        auto gep = make_gep(pointer_value, index);
+        block->insert(gep);
+        return gep;
+    }
 };
 
 
