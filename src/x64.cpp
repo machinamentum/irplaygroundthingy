@@ -85,7 +85,7 @@ s32 *_two_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 mod, 
         op2_reg   = operand2.base_reg;
         index_reg = operand2.index_reg;
 
-        assert(!(op2_reg >= RSP && op2_reg <= R9));
+        if (mod == MOD_INDIRECT_NO_DISP) assert(!(op2_reg >= RSP && op2_reg < R8));
     }
 
     dataptr->append_byte(REX((size == 8) ? 1 : 0, BIT3(operand1), BIT3(index_reg), BIT3(op2_reg)));
@@ -117,30 +117,30 @@ s32 *_two_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 mod, 
     return nullptr;
 }
 
-void _move_bidrectional(Data_Buffer *dataptr, u8 value_reg, u8 ptrbase, s32 disp, u32 size, bool to_memory) {
+void _move_bidrectional(Data_Buffer *dataptr, u8 value_reg, Address_Info info, u32 size, bool to_memory) {
     u8 op = (size == 1) ? 0x88 : 0x89;
     if (!to_memory) op += 0x02;
 
     u8 mod = MOD_INDIRECT_32BIT_DISP;
-    if      (disp == 0) mod = MOD_INDIRECT_NO_DISP;
-    else if (fits_into<s8>(disp)) {
+    if      (info.disp == 0) mod = MOD_INDIRECT_NO_DISP;
+    else if (fits_into<s8>(info.disp)) {
         mod = MOD_INDIRECT_8BIT_DISP;
-        disp = (s8) disp;
+        info.disp = (s8) info.disp;
     }
 
-    _two_register_operand_instruction(dataptr, op, mod, value_reg, addr_register_disp(ptrbase, disp), size);
+    _two_register_operand_instruction(dataptr, op, mod, value_reg, info, size);
 }
 
 void move_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst) {
     _two_register_operand_instruction(dataptr, 0x8B, 0x3, dst, addr_register_disp(src), 8);
 }
 
-void move_reg_to_memory(Data_Buffer *dataptr, u8 src, u8 dst, s32 disp, u32 size) {
-    _move_bidrectional(dataptr, src, dst, disp, size, true);
+void move_reg_to_memory(Data_Buffer *dataptr, u8 src, Address_Info info, u32 size) {
+    _move_bidrectional(dataptr, src, info, size, true);
 }
 
-void move_memory_to_reg(Data_Buffer *dataptr, u8 dst, u8 src, s32 disp, u32 size) {
-    _move_bidrectional(dataptr, dst, src, disp, size, false);
+void move_memory_to_reg(Data_Buffer *dataptr, u8 dst, Address_Info info, u32 size) {
+    _move_bidrectional(dataptr, dst, info, size, false);
 }
 
 u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 value, u8 reg, u32 size = 8) {
@@ -178,21 +178,23 @@ void move_imm32_to_memory(Data_Buffer *dataptr, u32 value, u8 dst, s32 disp, u32
     if (size == 4 || size == 8) *(u32 *)operand = value;
 }
 
-void move_memory_to_reg_zero_ext(Data_Buffer *dataptr, u8 value_reg, u8 ptrbase, s32 disp, u32 size) {
+void move_memory_to_reg_zero_ext(Data_Buffer *dataptr, u8 value_reg, Address_Info info, u32 size) {
     if (size <= 2) {
         u8 op = (size == 1) ? 0xB6 : 0xB7;
+
+        s32 disp = info.disp;
 
         u8 mod = MOD_INDIRECT_32BIT_DISP;
         if      (disp == 0) mod = MOD_INDIRECT_NO_DISP;
         else if (fits_into<s8>(disp)) {
             mod = MOD_INDIRECT_8BIT_DISP;
-            disp = (s8) disp;
+            info.disp = (s8) disp;
         }
 
         size = 4; // always load into 32-bit register
-        _two_register_operand_instruction(dataptr, op, mod, value_reg, addr_register_disp(ptrbase, disp), size, true);
+        _two_register_operand_instruction(dataptr, op, mod, value_reg, info, size, true);
     } else {
-        move_memory_to_reg(dataptr, value_reg, ptrbase, disp, size);
+        move_memory_to_reg(dataptr, value_reg, info, size);
     }
 }
 
@@ -209,6 +211,10 @@ void lea_into_reg64(Data_Buffer *dataptr, u8 dst, Address_Info source) {
     else if (fits_into<s8>(disp)) {
         mod = MOD_INDIRECT_8BIT_DISP;
         disp = (s8) disp;
+    }
+
+    if (source.machine_reg == RBP && disp == 0) {
+        mod = MOD_INDIRECT_8BIT_DISP;
     }
 
     _two_register_operand_instruction(dataptr, 0x8D, mod, dst, source, 8);
@@ -289,7 +295,7 @@ void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
         if (inst->result_spilled_onto_stack == 0 && inst->uses) {
             func->stack_size += 8; // @TargetInfo
             inst->result_spilled_onto_stack = func->stack_size;
-            move_reg_to_memory(dataptr, reg->machine_reg, RBP, -inst->result_spilled_onto_stack, inst->value_type->size);
+            move_reg_to_memory(dataptr, reg->machine_reg, addr_register_disp(RBP, -inst->result_spilled_onto_stack), inst->value_type->size);
         }
 
         reg->currently_holding_result_of_instruction = nullptr;
@@ -368,10 +374,11 @@ u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction
         assert(reg->currently_holding_result_of_instruction == inst);
         return reg->machine_reg;
     } else {
+        assert(!inst->result_stored_in);
         reg = get_free_or_suggested_register(function, dataptr, suggested_register, force_use_suggested, inst);
 
         assert(inst->result_spilled_onto_stack != 0);
-        move_memory_to_reg_zero_ext(dataptr, reg->machine_reg, RBP, -inst->result_spilled_onto_stack, inst->value_type->size);
+        move_memory_to_reg_zero_ext(dataptr, reg->machine_reg, addr_register_disp(RBP, -inst->result_spilled_onto_stack), inst->value_type->size);
         return reg->machine_reg;
     }
 }
@@ -444,6 +451,17 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
 
         block->text_ptrs_for_fixup.add((u32 *)value);
         return reg->machine_reg;
+    } else if (value->type == INSTRUCTION_ALLOCA) {
+        auto _alloca = static_cast<Instruction_Alloca *>(value);
+
+        if (_alloca->result_stored_in) return _alloca->result_stored_in->machine_reg;
+        if (_alloca->result_spilled_onto_stack != 0) return load_instruction_result(function, &code_section->data, _alloca, suggested_register, force_use_suggested);
+
+        Register *reg = get_free_or_suggested_register(function, &code_section->data, suggested_register, force_use_suggested, _alloca);
+
+        assert(_alloca->stack_offset != 0);
+        lea_into_reg64(&code_section->data, reg->machine_reg, addr_register_disp(RBP, -_alloca->stack_offset));
+        return reg->machine_reg;
     } else if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) {
         auto inst = static_cast<Instruction *>(value);
         return load_instruction_result(function, &code_section->data, inst, suggested_register, force_use_suggested);
@@ -453,13 +471,57 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
     return 0;
 }
 
+u8 maybe_get_instruction_register(Value *value) {
+    if (Instruction *inst = is_instruction(value)) {
+        if (inst->result_stored_in) return inst->result_stored_in->machine_reg;
+    }
+
+    return 0xFF;
+}
+
 Address_Info get_address_value_of_pointer(Linker_Object *object, Function *function, Section *code_section, Section *data_section, Value *value, u8 suggested_register = RAX) {
     assert(value->value_type->type == Type::POINTER);
 
     if (value->type == INSTRUCTION_ALLOCA) {
         auto _alloca = static_cast<Instruction_Alloca *>(value);
         return addr_register_disp(RBP, -_alloca->stack_offset);
-    } else {
+    }
+
+#if 0
+    else if (value->type == INSTRUCTION_GEP) {
+        Instruction_GEP *gep = static_cast<Instruction_GEP *>(value);
+
+        u32 size = gep->pointer_value->value_type->pointer_to->size;
+
+        if (size > 8) {
+            // we cant claim ownership of the index register so the result of this calculation
+            // would be nontrivial, just get the stored instruction result
+            u8 machine_reg = emit_load_of_value(object, function, code_section, data_section, value, suggested_register);
+            return addr_register_disp(machine_reg);
+        }
+
+        u8 target = maybe_get_instruction_register(gep->index);
+
+        Address_Info source = get_address_value_of_pointer(object, function, code_section, data_section, gep->pointer_value, (target == RAX) ? RCX : RAX);
+        // gep->pointer_value->uses--;
+
+        if (target == 0xFF) target = emit_load_of_value(object, function, code_section, data_section, gep->index,         (source.machine_reg == RAX) ? RCX : RAX);
+        // gep->index->uses--;
+
+        assert(source.machine_reg != target);
+
+        Address_Info info;
+        info.machine_reg = RSP; // SIB
+        info.disp        = source.disp;
+        info.base_reg    = source.machine_reg;
+        info.index_reg   = target;
+        info.scale       = (u8) size;
+
+        return info;
+    }
+#endif
+
+    else {
         u8 machine_reg = emit_load_of_value(object, function, code_section, data_section, value, suggested_register);
         return addr_register_disp(machine_reg);
     }
@@ -474,25 +536,17 @@ bool is_in_register(Value *value) {
     return false;
 }
 
-u8 maybe_get_instruction_register(Value *value) {
-    if (Instruction *inst = is_instruction(value)) {
-        if (inst->result_stored_in) return inst->result_stored_in->machine_reg;
-    }
-
-    return 0xFF;
-}
-
 u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *current_block, Section *code_section, Section *data_section, Instruction *inst) {
     inst->emitted = true;
     switch (inst->type) {
         case INSTRUCTION_ALLOCA: {
             auto _alloca = static_cast<Instruction_Alloca *>(inst);
 
-            Register *reg = get_free_or_suggested_register(function, &code_section->data, RAX, false, inst);
+            // Register *reg = get_free_or_suggested_register(function, &code_section->data, RAX, false, inst);
 
             assert(_alloca->stack_offset != 0);
-            lea_into_reg64(&code_section->data, reg->machine_reg, addr_register_disp(RBP, -_alloca->stack_offset));
-            return reg->machine_reg;
+            // lea_into_reg64(&code_section->data, reg->machine_reg, addr_register_disp(RBP, -_alloca->stack_offset));
+            return 0;
         }
 
         case INSTRUCTION_STORE: {
@@ -509,7 +563,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
                 assert(target_info.machine_reg != source);
 
-                move_reg_to_memory(&code_section->data, source, target_info.machine_reg, target_info.disp, (u8) store->store_target->value_type->pointer_to->size);
+                move_reg_to_memory(&code_section->data, source, target_info, (u8) store->store_target->value_type->pointer_to->size);
             }
 
             store->store_target->uses--;
@@ -526,63 +580,44 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             if (target_reg == RBP || target_reg == RSP) target_reg = RAX;
 
             load->pointer_value->uses--;
-            Register *reg = function->claim_register(&code_section->data, target_reg, inst);
+             Register *reg = get_free_or_suggested_register(function, &code_section->data, RAX, false, inst);
 
             // move_memory_to_reg(&code_section->data, reg->machine_reg, source, 0, load->value_type->size);
-            move_memory_to_reg_zero_ext(&code_section->data, reg->machine_reg, source.machine_reg, source.disp, load->value_type->size);
+            move_memory_to_reg_zero_ext(&code_section->data, reg->machine_reg, source, load->value_type->size);
             return reg->machine_reg;
         }
 
         case INSTRUCTION_GEP: {
             Instruction_GEP *gep = static_cast<Instruction_GEP *>(inst);
 
-            u8 source = maybe_get_instruction_register(gep->pointer_value);
             u8 target = maybe_get_instruction_register(gep->index);
 
-            if (source == 0xFF) source = emit_load_of_value(object, function, code_section, data_section, gep->pointer_value, (target == RAX) ? RCX : RAX);
+            Address_Info source = get_address_value_of_pointer(object, function, code_section, data_section, gep->pointer_value, (target == RAX) ? RCX : RAX);
             gep->pointer_value->uses--;
 
-            if (target == 0xFF) target = emit_load_of_value(object, function, code_section, data_section, gep->index,         (source == RAX) ? RCX : RAX);
+            if (target == 0xFF) target = emit_load_of_value(object, function, code_section, data_section, gep->index,         (source.machine_reg == RAX) ? RCX : RAX);
             gep->index->uses--;
 
-            assert(source != target);
+            assert(source.machine_reg != target);
 
             Register *reg = function->claim_register(&code_section->data, target, inst);
 
             u32 size = gep->pointer_value->value_type->pointer_to->size;
 
-            if (size > 1 && size <= 8) {
-                // SIB indexing only supporting
-                // the [base + (index * scale)] mode right now
-                // So find a register that we can move the base into..
-                if (!(target <= RBX)) {
-                    for (u8 i = 0; i < RBX; ++i) {
-                        Register *reg = &function->register_usage[i];
-
-                        if (reg->machine_reg != target) {
-                            maybe_spill_register(function, &code_section->data, reg);
-                            move_reg64_to_reg64(&code_section->data, target, reg->machine_reg);
-                            target = reg->machine_reg;
-                            break;
-                        }
-                    }
-                }
-
-                Address_Info info;
-                info.machine_reg = RSP; // SIB
-                info.disp        = 0;
-                info.base_reg    = source;
-                info.index_reg   = target;
-                info.scale       = (u8) size;
-
-                lea_into_reg64(&code_section->data, reg->machine_reg, info);
-            } else {
-                if (size > 1)
-                    imul_reg64_with_imm32(&code_section->data, reg->machine_reg, gep->pointer_value->value_type->pointer_to->size, 8);
-
-                add_reg64_to_reg64(&code_section->data, source, reg->machine_reg, gep->value_type->size);
+            if (size > 8) {
+                imul_reg64_with_imm32(&code_section->data, reg->machine_reg, gep->pointer_value->value_type->pointer_to->size, 8);
+                size = 1;
             }
 
+            Address_Info info;
+            info.machine_reg = RSP; // SIB
+            info.disp        = source.disp;
+            info.base_reg    = source.machine_reg;
+            info.index_reg   = target;
+            info.scale       = (u8) size;
+
+            if (source.disp) lea_into_reg64(&code_section->data, reg->machine_reg, info);
+            else             add_reg64_to_reg64(&code_section->data, source.machine_reg, reg->machine_reg, gep->value_type->size);
 
             return 0;
         }
@@ -964,6 +999,7 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
     // Ensure stack is 16-byte aligned.
     function->stack_size = ensure_aligned(function->stack_size, 16);
     assert((function->stack_size & (15)) == 0);
+    function->stack_size += 8;
 
 
     assert(function->stack_size >= 0);
