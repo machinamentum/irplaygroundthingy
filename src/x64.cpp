@@ -755,14 +755,11 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             // :WastefulPushPops:
             // pop in reverse order
-            for (size_t i = function->register_usage.count; i > 0; --i) {
-                auto &reg = function->register_usage[i-1];
-                if (reg.machine_reg == RSP || reg.machine_reg == RBP) continue;
-
-                pop_reg64(&code_section->data, reg.machine_reg);
+            if (object->target.is_win32()) {
+                pop_reg64(&code_section->data, RSI);
+                pop_reg64(&code_section->data, RDI);
             }
-            
-
+            pop_reg64(&code_section->data, RBX);
             pop_reg64(&code_section->data, RBP);
 
             code_section->data.append_byte(0xC3);
@@ -884,17 +881,19 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
     function->register_usage.add(make_reg(RDI));
     function->register_usage.add(make_reg(R8));
     function->register_usage.add(make_reg(R9));
-    
-
-    push_reg64(&code_section->data, RBP);
 
     // :WastefulPushPops: @Cleanup pushing all the registers we may need is
     // a bit excessive and wasteful.
-   for (auto reg : function->register_usage) {
-        if (reg.machine_reg == RSP || reg.machine_reg == RBP) continue;
+    push_reg64(&code_section->data, RBP);
+    push_reg64(&code_section->data, RBX);
 
-        push_reg64(&code_section->data, reg.machine_reg);
-   }
+    if (object->target.is_win32()) {
+        push_reg64(&code_section->data, RDI);
+        push_reg64(&code_section->data, RSI);
+    }
+
+    // R12, R13, R14, and R15 must also be callee-saved in both conventions
+
     
     move_reg64_to_reg64(&code_section->data, RSP, RBP);
 
