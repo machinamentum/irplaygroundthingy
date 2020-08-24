@@ -286,7 +286,7 @@ void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
         auto inst = reg->currently_holding_result_of_instruction;
         inst->result_stored_in = nullptr;
 
-        if (inst->result_spilled_onto_stack == 0) {
+        if (inst->result_spilled_onto_stack == 0 && inst->uses) {
             func->stack_size += 8; // @TargetInfo
             inst->result_spilled_onto_stack = func->stack_size;
             move_reg_to_memory(dataptr, reg->machine_reg, RBP, -inst->result_spilled_onto_stack, inst->value_type->size);
@@ -331,7 +331,28 @@ u8 get_next_win64_abi_register(u8 *index) {
 Register *get_free_or_suggested_register(Function *function, Data_Buffer *dataptr, u8 suggested_register, bool force_use_suggested, Instruction *inst) {
     Register *reg = nullptr;
 
-    if (!force_use_suggested) reg = function->get_free_register();
+    if (!force_use_suggested) {
+        reg = function->get_free_register();
+        if (!reg) {
+
+            u32 uses = U32_MAX;
+            Register *regi;
+            for (auto &reg : function->register_usage) {
+                if (reg.machine_reg == RSP || reg.machine_reg == RBP) continue;
+
+                if (reg.currently_holding_result_of_instruction) {
+                    auto inst = reg.currently_holding_result_of_instruction;
+
+                    if (inst->uses < uses) {
+                        uses = inst->uses;
+                        regi = &reg;
+                    }
+                }
+            }
+
+            reg = regi;
+        }
+    }
 
     if (!reg) reg = &function->register_usage[suggested_register];
     
@@ -490,6 +511,9 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
                 move_reg_to_memory(&code_section->data, source, target_info.machine_reg, target_info.disp, (u8) store->store_target->value_type->pointer_to->size);
             }
+
+            store->store_target->uses--;
+            store->source_value->uses--;
             break;
         }
 
@@ -501,6 +525,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             u8 target_reg = source.machine_reg;
             if (target_reg == RBP || target_reg == RSP) target_reg = RAX;
 
+            load->pointer_value->uses--;
             Register *reg = function->claim_register(&code_section->data, target_reg, inst);
 
             // move_memory_to_reg(&code_section->data, reg->machine_reg, source, 0, load->value_type->size);
@@ -515,7 +540,10 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             u8 target = maybe_get_instruction_register(gep->index);
 
             if (source == 0xFF) source = emit_load_of_value(object, function, code_section, data_section, gep->pointer_value, (target == RAX) ? RCX : RAX);
+            gep->pointer_value->uses--;
+
             if (target == 0xFF) target = emit_load_of_value(object, function, code_section, data_section, gep->index,         (source == RAX) ? RCX : RAX);
+            gep->index->uses--;
 
             assert(source != target);
 
@@ -568,6 +596,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             u8 rhs_reg = maybe_get_instruction_register(add->rhs);
 
             if (lhs_reg == 0xFF) lhs_reg = emit_load_of_value(object, function, code_section, data_section, add->lhs, (rhs_reg == RAX) ? RCX : RAX);
+            add->lhs->uses--;
 
             Constant *constant = is_constant(add->rhs);
             if (constant && constant->is_integer()) {
@@ -579,6 +608,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             }
 
             if (rhs_reg == 0xFF) rhs_reg = emit_load_of_value(object, function, code_section, data_section, add->rhs, (lhs_reg == RAX) ? RCX : RAX);
+            add->rhs->uses--;
 
             Register *reg = function->claim_register(&code_section->data, lhs_reg, inst);
 
@@ -657,6 +687,8 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 u8 result = emit_load_of_value(object, function, code_section, data_section, p, param_reg, true);
 
                 if (result != param_reg) move_reg64_to_reg64(&code_section->data, result, param_reg);
+
+                p->uses--;
             }
 
             // Spill RAX
@@ -812,6 +844,10 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                     code_section->data.append_byte(ModRM(0b11, 4, target & 0b0111));
                 }
             }
+
+            branch->true_target->uses--;
+            if (branch->condition) branch->condition->uses--;
+            if (branch->failure_target) branch->failure_target->uses--;
             break;
         }
 

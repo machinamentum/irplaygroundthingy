@@ -89,6 +89,7 @@ struct Value {
     Type *value_type;
 
     String name;
+    u32 uses = 0;
 };
 
 struct Constant : Value {
@@ -311,6 +312,10 @@ Instruction_Branch *make_branch(Value *condition_or_null, Value *true_target, Va
     branch->condition      = condition_or_null;
     branch->true_target    = true_target;
     branch->failure_target = failure_target;
+
+    if (condition_or_null) condition_or_null->uses++;
+    if (failure_target)    failure_target->uses++;
+    true_target->uses++;
     return branch;
 }
 
@@ -320,6 +325,9 @@ Instruction_GEP *make_gep(Value *pointer_value, Value *index) {
     gep->pointer_value = pointer_value;
     gep->index         = index;
     gep->value_type = pointer_value->value_type;
+
+    pointer_value->uses++;
+    index->uses++;
     return gep;
 }
 
@@ -331,6 +339,9 @@ Instruction_Add *make_add(Value *lhs, Value *rhs) {
     add->lhs = lhs;
     add->rhs = rhs;
     add->value_type = lhs->value_type;
+
+    lhs->uses++;
+    rhs->uses++;
     return add;
 }
 
@@ -342,6 +353,9 @@ Instruction_Sub *make_sub(Value *lhs, Value *rhs) {
     sub->lhs = lhs;
     sub->rhs = rhs;
     sub->value_type = lhs->value_type;
+
+    lhs->uses++;
+    rhs->uses++;
     return sub;
 }
 
@@ -353,6 +367,9 @@ Instruction_Mul *make_mul(Value *lhs, Value *rhs) {
     sub->lhs = lhs;
     sub->rhs = rhs;
     sub->value_type = lhs->value_type;
+
+    lhs->uses++;
+    rhs->uses++;
     return sub;
 }
 
@@ -363,6 +380,8 @@ Instruction_Load *make_load(Value *pointer_value) {
     Instruction_Load *load = new Instruction_Load();
     load->pointer_value = pointer_value;
     load->value_type    = pointer_value->value_type->pointer_to;
+
+    pointer_value->uses++;
     return load;
 }
 
@@ -371,6 +390,9 @@ Instruction_Store *make_store(Value *source_value, Value *store_target) {
     Instruction_Store *store = new Instruction_Store();
     store->source_value = source_value;
     store->store_target = store_target;
+
+    source_value->uses++;
+    store_target->uses++;
     return store;
 }
 
@@ -394,6 +416,7 @@ Instruction_Call *make_call(Function *func, const Array_Slice<Value *> &paramete
 
     for (const auto v : parameters) {
         call->parameters.add(v);
+        v->uses++;
     }
     return call;
 }
@@ -401,6 +424,7 @@ Instruction_Call *make_call(Function *func, const Array_Slice<Value *> &paramete
 inline
 Instruction_Return *make_return(Value *retval = nullptr) {
     Instruction_Return *ret = new Instruction_Return();
+    if (retval) retval->uses++;
     return ret;
 }
 

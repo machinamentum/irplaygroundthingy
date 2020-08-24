@@ -74,6 +74,6 @@ void old_test() {
     unit.functions.add(main_func);
 
 
-    // emit_obj_file(&unit);
-    do_jit_and_run_program_main(&unit);
+    emit_obj_file(&unit);
+    // do_jit_and_run_program_main(&unit);
 }
