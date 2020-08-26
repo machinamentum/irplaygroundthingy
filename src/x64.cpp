@@ -273,8 +273,8 @@ void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
 
         if (inst->result_spilled_onto_stack == 0 && inst->uses) {
             func->stack_size += 8; // @TargetInfo
-            inst->result_spilled_onto_stack = func->stack_size;
-            move_reg_to_memory(dataptr, reg->machine_reg, addr_register_disp(RBP, -inst->result_spilled_onto_stack), inst->value_type->size);
+            inst->result_spilled_onto_stack = -func->stack_size;
+            move_reg_to_memory(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type->size);
         }
 
         reg->currently_holding_result_of_instruction = nullptr;
@@ -327,7 +327,7 @@ u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction
         reg = get_free_or_suggested_register(function, dataptr, suggested_register, force_use_suggested, inst);
 
         assert(inst->result_spilled_onto_stack != 0);
-        move_memory_to_reg_zero_ext(dataptr, reg->machine_reg, addr_register_disp(RBP, -inst->result_spilled_onto_stack), inst->value_type->size);
+        move_memory_to_reg_zero_ext(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type->size);
         return reg->machine_reg;
     }
 }
@@ -409,7 +409,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
         Register *reg = get_free_or_suggested_register(function, &code_section->data, suggested_register, force_use_suggested, _alloca);
 
         assert(_alloca->stack_offset != 0);
-        lea_into_reg64(&code_section->data, reg->machine_reg, addr_register_disp(RBP, -_alloca->stack_offset));
+        lea_into_reg64(&code_section->data, reg->machine_reg, addr_register_disp(RBP, _alloca->stack_offset));
         return reg->machine_reg;
     } else if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) {
         auto inst = static_cast<Instruction *>(value);
@@ -433,7 +433,7 @@ Address_Info get_address_value_of_pointer(Linker_Object *object, Function *funct
 
     if (value->type == INSTRUCTION_ALLOCA) {
         auto _alloca = static_cast<Instruction_Alloca *>(value);
-        return addr_register_disp(RBP, -_alloca->stack_offset);
+        return addr_register_disp(RBP, _alloca->stack_offset);
     }
 
 // We could theoretically do this and save some instructions
@@ -866,7 +866,7 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
                 function->stack_size += (_alloca->alloca_type->size * _alloca->array_size);
                 if ((function->stack_size % 8)) function->stack_size += 8 - (function->stack_size % 8);
 
-                _alloca->stack_offset = function->stack_size;
+                _alloca->stack_offset = -function->stack_size;
             }
         }
     }
