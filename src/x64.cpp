@@ -167,7 +167,7 @@ u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 value, u8 reg, u32 size = 8) 
     return (u64 *)operand;
 }
 
-void move_imm32_to_memory(Data_Buffer *dataptr, u32 value, Address_Info info, u32 size) {
+void move_imm32_sext_to_memory(Data_Buffer *dataptr, u32 value, Address_Info info, u32 size) {
     u8 op = (size == 1) ? 0xC6 : 0xC7;
     _two_register_operand_instruction(dataptr, op, false, RAX, info, size);
 
@@ -281,36 +281,6 @@ void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
     }
 
     reg->is_free = true;
-}
-
-u8 get_next_system_v_abi_register(u8 *index) {
-    u8 value = *index;
-
-    (*index) += 1;
-
-    switch (value) {
-        case 0: return RDI;
-        case 1: return RSI;
-        case 2: return RDX;
-        case 3: return RCX;
-        case 4: return R8;
-        case 5: return R9;
-        default: return 0xFF;
-    }
-}
-
-u8 get_next_win64_abi_register(u8 *index) {
-    u8 value = *index;
-
-    (*index) += 1;
-
-    switch (value) {
-        case 0: return RCX;
-        case 1: return RDX;
-        case 2: return R8;
-        case 3: return R9;
-        default: return 0xFF;
-    }
 }
 
 Register *get_free_or_suggested_register(Function *function, Data_Buffer *dataptr, u8 suggested_register, bool force_use_suggested, Instruction *inst) {
@@ -470,7 +440,8 @@ Address_Info get_address_value_of_pointer(Linker_Object *object, Function *funct
 // but this ends up generating a large amount of bytes
 // due to having to write the displacement bytes. I don't yet know
 // if code in that form is faster due to fewer instructions or due
-// to smaller code size.
+// to smaller code size. Note also that that emit_load_of_value of
+// gep->index could also generate additional instructions...
 #if 0
     else if (value->type == INSTRUCTION_GEP) {
         Instruction_GEP *gep = static_cast<Instruction_GEP *>(value);
@@ -511,15 +482,6 @@ Address_Info get_address_value_of_pointer(Linker_Object *object, Function *funct
     }
 }
 
-bool is_in_register(Value *value) {
-    if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) {
-        auto inst = static_cast<Instruction *>(value);
-        return inst->result_stored_in != nullptr;
-    }
-
-    return false;
-}
-
 u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *current_block, Section *code_section, Section *data_section, Instruction *inst) {
     inst->emitted = true;
     switch (inst->type) {
@@ -540,7 +502,8 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             Constant *constant = is_constant(store->source_value);
             if (constant && constant->is_integer()) {
-                move_imm32_to_memory(&code_section->data, constant->integer_value, target_info, store->store_target->value_type->pointer_to->size);
+                // @TODO ensure this fits
+                move_imm32_sext_to_memory(&code_section->data, constant->integer_value, target_info, store->store_target->value_type->pointer_to->size);
             } else {
                 u8 source = maybe_get_instruction_register(store->source_value);
                 if (source == 0xFF) source = emit_load_of_value(object, function, code_section, data_section, store->source_value, (target_info.machine_reg == RAX) ? RCX : RAX);
@@ -657,51 +620,20 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             if (object->target.is_win32()) {
                 // shadow space for the callee to spill registers...
-                sub_imm32_from_reg64(&code_section->data, RSP, 32, 8);
+                function->largest_call_stack_adjustment += 32;
             }
-
-            u8 index = 0;
 
             // Spill all argument passing registers to preserve
             // their values in case the callee wishes to use them
-            while (true) {
-                u8 param_reg = 0xFF;
-
-                if (object->target.is_win32()) {
-                    param_reg = get_next_win64_abi_register(&index);
-                } else {
-                    param_reg = get_next_system_v_abi_register(&index);
-                }
-
-                if (param_reg == 0xFF) break;
-
-                for (auto &reg : function->register_usage) {
-                    if (reg.machine_reg == param_reg) {
-                        maybe_spill_register(function, &code_section->data, &reg);
-                        break;
-                    }
-                }
+            for (auto machine_reg : function->parameter_registers) {
+                maybe_spill_register(function, &code_section->data, &function->register_usage[machine_reg]);
             }
 
-            index = 0;
-
-            for (auto p : call->parameters) {
-                u8 param_reg = 0xFF;
-
-                if (object->target.is_win32()) {
-                    param_reg = get_next_win64_abi_register(&index);
-                } else {
-                    param_reg = get_next_system_v_abi_register(&index);
-                }
-
-                assert(param_reg != 0xFF);
-
-                for (auto &reg : function->register_usage) {
-                    if (reg.machine_reg == param_reg) {
-                        reg.is_free = false;
-                        break;
-                    }
-                }
+            assert(call->parameters.count <= function->parameter_registers.count); // @Incomplete
+            for (u32 i = 0; i < call->parameters.count; ++i) {
+                auto p = call->parameters[i];
+                u8 param_reg = function->parameter_registers[i];
+                function->register_usage[param_reg].is_free = false;
 
                 u8 result = emit_load_of_value(object, function, code_section, data_section, p, param_reg, true);
 
@@ -758,10 +690,6 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 reloc.addend = 0; // @TODO
 
                 code_section->relocations.add(reloc);
-            }
-
-            if (object->target.is_win32()) {
-                add_imm32_to_reg64(&code_section->data, RSP, 32, 8);
             }
 
             return RAX;
@@ -890,6 +818,20 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
     if (!sym->is_externally_defined) sym->section_number = code_section->section_number;
     sym->section_offset = code_section->data.size();
 
+    if (object->target.is_win32()) {
+        function->parameter_registers.add(RCX);
+        function->parameter_registers.add(RDX);
+        function->parameter_registers.add(R8);
+        function->parameter_registers.add(R9);
+    } else {
+        function->parameter_registers.add(RDI);
+        function->parameter_registers.add(RSI);
+        function->parameter_registers.add(RDX);
+        function->parameter_registers.add(RCX);
+        function->parameter_registers.add(R8);
+        function->parameter_registers.add(R9);
+    }
+
     function->register_usage.add(make_reg(RAX));
     function->register_usage.add(make_reg(RCX));
     function->register_usage.add(make_reg(RDX));
@@ -980,6 +922,7 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
         }
     }
 
+    function->stack_size += function->largest_call_stack_adjustment;
     // Ensure stack is 16-byte aligned.
     function->stack_size = ensure_aligned(function->stack_size, 16);
     assert((function->stack_size & (15)) == 0);

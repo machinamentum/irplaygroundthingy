@@ -257,6 +257,10 @@ struct Function : Global_Value {
     // For code gen
     Array<Register> register_usage;
 
+    // @Temporary this information is the same across all functions,
+    // we should put these in Target or something...
+    Array<u8>       parameter_registers;
+
     Register *get_free_register() {
         for (auto &reg : register_usage) {
             if (reg.is_free) {
@@ -290,6 +294,7 @@ struct Function : Global_Value {
 
     Array<u32 *>    stack_size_fixups;
     s32 stack_size = 0;
+    s32 largest_call_stack_adjustment = 0;
 
     void insert(Basic_Block *block) {
         block->insertion_index = this->blocks.count;
