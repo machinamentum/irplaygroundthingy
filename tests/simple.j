@@ -7,4 +7,7 @@ func test() {
 
 func main() {
     test();
+
+    var i: int = 123;
+    printf("i: %d\n", i);
 }

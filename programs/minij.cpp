@@ -1,12 +1,23 @@
-#include "general.h"
-#include "linker_object.h"
-#include "ir.h"
 
 #include <stdio.h>
 #include <assert.h>
-#include <stdlib.h>
+
+#include "linker_object.h"
+#include "ir.h"
 
 #include <vector>
+
+#include <stdint.h>
+
+typedef uint64_t u64;
+typedef uint32_t u32;
+typedef uint16_t u16;
+typedef uint8_t  u8;
+
+typedef int64_t  s64;
+typedef int32_t  s32;
+typedef int16_t  s16;
+typedef int8_t   s8;
 
 char *get_file_contents(char *path) {
     FILE *file = fopen(path, "rb");
@@ -37,8 +48,10 @@ struct Token {
         FLOAT,
         STRING,
 
-        KEYWORD_START,
+        KEYWORD_START = 500,
         KEYWORD_FUNC = KEYWORD_START,
+        KEYWORD_VAR = 501,
+        KEYWORD_INT = 502,
 
         KEYWORD_END,
     };
@@ -60,7 +73,8 @@ Token token(u32 type) {
 
 char *keywords[] = {
     "func",
-
+    "var",
+    "int",
 };
 
 bool starts_identifier(char c) {
@@ -94,7 +108,7 @@ struct Lexer {
             auto length = end - buffer;
             u32 type = Token::IDENTIFIER;
             for (u32 i = 0; i < (Token::KEYWORD_END - Token::KEYWORD_START); ++i) {
-                if (strncmp(buffer, keywords[i], length) == 0) {
+                if (strncmp(buffer, keywords[i], strlen(keywords[i])) == 0) {
                     type = Token::KEYWORD_START + i;
                     break;
                 }
@@ -145,6 +159,11 @@ struct Lexer {
 
             buffer = end+1;
             return t;
+        } else if (*buffer >= '0' && *buffer <= '9') {
+            Token tok = token(Token::INTEGER);
+
+            tok.integer_value = strtoul(buffer, &buffer, 10);
+            return tok;
         }
 
         Token t = token(*buffer);
@@ -161,15 +180,20 @@ struct Lexer {
     }
 };
 
+struct Instruction_Alloca;
+
 namespace AST {
     enum {
         INVALID,
         FUNCTION_CALL,
         LITERAL,
+        VARIABLE,
+        IDENTIFIER,
     };
 
     struct Expression {
-        u32 type;
+        u32   type;
+        Type *expr_type;
     };
 
     struct Literal : Expression {
@@ -188,7 +212,22 @@ namespace AST {
             u64    integer_value;
             double float_value;
         };
+    };
 
+    struct Variable : Expression {
+        Variable() { type = VARIABLE; }
+        char *name;
+
+        Expression *initializer = nullptr;
+        Instruction_Alloca *storage;
+    };
+
+    struct Identifier : Expression {
+        Identifier() { type = IDENTIFIER; }
+
+        char *name;
+
+        Variable *variable;
     };
 
     struct Function_Call : Expression {
@@ -207,6 +246,8 @@ namespace AST {
 
         Scope *body;
     };
+
+
 };
 
 struct Parser {
@@ -217,8 +258,10 @@ struct Parser {
         if (token_cursor < (tokens.size()-1)) token_cursor += 1;
     }
 
-    Token peek_token() {
-        return tokens[token_cursor];
+    Token peek_token(s32 offset = 0) {
+        s32 index = token_cursor + offset;
+        if (index >= (tokens.size()-1)) index = tokens.size()-1;
+        return tokens[index];
     }
 
     bool expect_and_eat(u32 type) {
@@ -230,7 +273,8 @@ struct Parser {
     bool expect(u32 type) {
         Token t = peek_token();
         if (t.type != type) {
-            printf("Expected token %d but got %d\n", t.type);
+            printf("Expected token %d but got %d\n", type, t.type);
+            __builtin_debugtrap();
             return false;
         }
 
@@ -260,7 +304,12 @@ struct Parser {
 
     AST::Expression *parse_expression() {
         if (peek_token().type == Token::IDENTIFIER) {
-            return parse_function_call();
+            if (peek_token(1).type == '(') return parse_function_call();
+
+            AST::Identifier *ident = new AST::Identifier();
+            ident->name = peek_token().string_value;
+            next_token();
+            return ident;
         }
 
         if (peek_token().type == Token::STRING) {
@@ -274,7 +323,69 @@ struct Parser {
             return lit;
         }
 
+        if (peek_token().type == Token::INTEGER) {
+            AST::Literal *lit = new AST::Literal();
+
+            Token t = peek_token();
+            lit->literal_type = AST::Literal::INTEGER;
+            lit->integer_value = t.integer_value;
+
+            next_token();
+            return lit;
+        }
+
         return nullptr;
+    }
+
+    Type *parse_type_spec() {
+        if (peek_token().type == '*') {
+            next_token();
+            return make_pointer_type(parse_type_spec());
+        }
+
+        if (peek_token().type == Token::KEYWORD_INT) {
+            next_token();
+            return make_integer_type(4);
+        }
+
+        printf("Invalid type specfifer: %d\n", peek_token().type);
+        return nullptr;
+    }
+
+    AST::Expression *parse_statement() {
+        if (peek_token().type == Token::KEYWORD_VAR) {
+            next_token();
+
+            if (!expect(Token::IDENTIFIER)) return nullptr;
+
+            AST::Variable *var = new AST::Variable();
+            var->name = peek_token().string_value;
+
+            next_token();
+
+            if (!expect_and_eat(':')) return nullptr;
+
+            var->expr_type = parse_type_spec();
+            if (!var->expr_type) {
+                printf("Expected type specification following ':' in var declaration.\n");
+                return nullptr;
+            }
+
+            if (peek_token().type == '=') {
+                next_token();
+
+                var->initializer = parse_expression();
+            }
+
+            if (!expect_and_eat(';')) return nullptr;
+            return var;
+        }
+
+
+        AST::Expression *expr = parse_expression();
+        if (!expect_and_eat(';')) return nullptr;
+
+        return expr;
     }
 
     AST::Scope *parse_scope() {
@@ -283,10 +394,8 @@ struct Parser {
         AST::Scope *scope = new AST::Scope();
 
         while (peek_token().type != '}') {
-            AST::Expression *expr = parse_expression();
+            AST::Expression *expr = parse_statement();
             if (expr) scope->statements.push_back(expr);
-
-            if (peek_token().type == ';') next_token();
         }
 
         if (!expect_and_eat('}')) return nullptr;
@@ -317,7 +426,7 @@ struct Parser {
     }
 };
 
-Value *emit_expression(AST::Expression *expr, Compilation_Unit *unit, IR_Manager *irm) {
+Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilation_Unit *unit, IR_Manager *irm) {
     switch (expr->type) {
         case AST::LITERAL: {
             auto lit = static_cast<AST::Literal *>(expr);
@@ -336,7 +445,7 @@ Value *emit_expression(AST::Expression *expr, Compilation_Unit *unit, IR_Manager
             Array<Value *> args;
 
             for (auto a : call->arguments) {
-                args.add(emit_expression(a, unit, irm));
+                args.add(emit_expression(a, function, unit, irm));
             }
 
             Function *target = nullptr;
@@ -351,12 +460,69 @@ Value *emit_expression(AST::Expression *expr, Compilation_Unit *unit, IR_Manager
 
             return irm->insert_call(target, args);
         }
+
+        case AST::VARIABLE: {
+            auto var = static_cast<AST::Variable *>(expr);
+
+            var->storage = irm->insert_alloca(var->expr_type);
+
+            irm->insert_store(emit_expression(var->initializer, function, unit, irm), var->storage);
+            return nullptr;
+        }
+
+        case AST::IDENTIFIER: {
+            auto ident = static_cast<AST::Identifier *>(expr);
+
+            AST::Variable *target = nullptr;
+            for (auto stmt : function->body->statements) {
+                if (stmt->type == AST::VARIABLE) {
+                    auto var = static_cast<AST::Variable *>(stmt);
+                    if (strcmp(ident->name, var->name) == 0) {
+                        target = var;
+                        break;
+                    }
+                }
+            }
+
+            if (!target) {
+                printf("No varibale named '%s' in function '%s'.\n", ident->name, function->name);
+                exit(-1);
+                return nullptr;
+            }
+
+            if (!target->storage) {
+                printf("Variable '%s' used before declared!\n", target->name);
+                exit(-1);
+                return nullptr;
+            }
+
+            return irm->insert_load(target->storage);
+        }
     }
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) {
-        printf("Usage: %s <source-file>\n", argv[0]);
+    char *filename = nullptr;
+    bool do_jit = false;
+
+    for (int i = 1; i < argc; ++i) {
+        char *option = argv[i];
+
+        if (option[0] == '-') {
+            if (strcmp("-jit", option) == 0) {
+                do_jit = true;
+                continue;
+            } 
+
+            printf("Unknown option: %s\n", option);
+            return -1;
+        } else {
+            filename = option;
+        }
+    }
+
+    if (!filename) {
+        printf("Usage: %s <filename>\n", argv[0]);
         return -1;
     }
 
@@ -404,16 +570,16 @@ int main(int argc, char **argv) {
             irm->set_block(block);
 
             for (auto expr: function->body->statements) {
-                emit_expression(expr, &unit, irm);
+                emit_expression(expr, function, &unit, irm);
             }
 
             irm->insert_return();
         }
     }
 
-    // emit_obj_file(&unit);
-    do_jit_and_run_program_main(&unit);
-
+    if   (do_jit) do_jit_and_run_program_main(&unit);
+    else          emit_obj_file(&unit);
+    
     return 0;
 }
 
