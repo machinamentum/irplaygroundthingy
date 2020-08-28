@@ -25,6 +25,7 @@ enum {
     INSTRUCTION_,
     INSTRUCTION_GEP,
     INSTRUCTION_BRANCH,
+    INSTRUCTION_DIV,
 
     INSTRUCTION_LAST,
 };
@@ -192,6 +193,12 @@ struct Instruction_Sub : Instruction_Math_Binary_Op {
 
 struct Instruction_Mul : Instruction_Math_Binary_Op {
     Instruction_Mul() { type = INSTRUCTION_MUL; }
+};
+
+struct Instruction_Div : Instruction_Math_Binary_Op {
+    Instruction_Div() { type = INSTRUCTION_DIV; }
+
+    bool signed_division;
 };
 
 struct Instruction_GEP : Instruction {
@@ -378,6 +385,21 @@ Instruction_Mul *make_mul(Value *lhs, Value *rhs) {
     return sub;
 }
 
+inline
+Instruction_Div *make_div(Value *lhs, Value *rhs, bool signed_division) {
+    // @Incomplete assert that lhs and rhs types match
+    Instruction_Div *div = new Instruction_Div();
+    div->value_type = lhs->value_type;
+    div->lhs = lhs;
+    div->rhs = rhs;
+    div->value_type = lhs->value_type;
+    div->signed_division = signed_division;
+
+    lhs->uses++;
+    rhs->uses++;
+    return div;
+}
+
 
 inline
 Instruction_Load *make_load(Value *pointer_value) {
@@ -500,6 +522,12 @@ struct IR_Manager {
         auto mul = make_mul(lhs, rhs);
         block->insert(mul);
         return mul;
+    }
+
+    Instruction_Div *insert_div(Value *lhs, Value *rhs, bool signed_division) {
+        auto div = make_div(lhs, rhs, signed_division);
+        block->insert(div);
+        return div;
     }
 
     Instruction_Branch *insert_branch(Value *condition_or_null, Value *true_target, Value *failure_target = nullptr) {

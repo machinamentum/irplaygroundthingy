@@ -257,6 +257,18 @@ void add_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     _two_register_operand_instruction(dataptr, op, true, src, addr_register_disp(dst), size);
 }
 
+void xor_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
+    u8 op = (size == 1) ? 0x32 : 0x33;
+    _two_register_operand_instruction(dataptr, op, true, src, addr_register_disp(dst), size);
+}
+
+void div_reg64_with_rax(Data_Buffer *dataptr, u8 src, u32 size, bool signed_division) {
+    u8 op = (size == 1) ? 0xF6 : 0xF7;
+    u8 version = 6; // unsigned
+    if (signed_division) version = 7;
+    _two_register_operand_instruction(dataptr, op, true, version, addr_register_disp(src), size);
+}
+
 void sub_reg64_from_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     u8 op = (size == 1) ? 0x28 : 0x29;
     _two_register_operand_instruction(dataptr, op, true, src, addr_register_disp(dst), size);
@@ -264,6 +276,13 @@ void sub_reg64_from_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
 
 void debugbreak(Data_Buffer *dataptr) {
     dataptr->append_byte(0xCC);
+}
+
+void cwd_cdq(Data_Buffer *dataptr, u32 size) {
+    // 1 byte sign extension not supported, it seems this is because 1-byte
+    // division uses the entire 16-bit AX register instead of using DL:AL together
+    assert(size >= 2);
+    _single_register_operand_instruction(dataptr, 0x99, RAX, size);
 }
 
 void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
@@ -569,10 +588,45 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             return 0;
         }
 
+        case INSTRUCTION_DIV: {
+            auto div = static_cast<Instruction_Div *>(inst);
+
+            u8 lhs_reg = maybe_get_instruction_register(div->lhs);
+            u8 rhs_reg = maybe_get_instruction_register(div->rhs);
+
+            if (lhs_reg == 0xFF) lhs_reg = emit_load_of_value(object, function, code_section, data_section, div->lhs, RAX, true);
+            div->lhs->uses--;
+
+            // Result always in RAX
+            Register *reg = function->claim_register(&code_section->data, RAX, inst);
+
+            if (lhs_reg != RAX) {
+                move_reg64_to_reg64(&code_section->data, lhs_reg, RAX);
+                lhs_reg = RAX;
+            }
+
+            if (rhs_reg == 0xFF) rhs_reg = emit_load_of_value(object, function, code_section, data_section, div->rhs, RCX);
+            div->rhs->uses--;
+
+            assert(rhs_reg != RAX);
+
+            if (div->value_type->size >= 2) {
+                maybe_spill_register(function, &code_section->data, &function->register_usage[RDX]);
+                if   (div->signed_division) cwd_cdq(&code_section->data, div->value_type->size);
+                else                        xor_reg64_to_reg64(&code_section->data, RDX, RDX, 8);
+            } else {
+                // @TODO sign-extend AL value into AH
+            }
+
+            div_reg64_with_rax(&code_section->data, rhs_reg, div->value_type->size, div->signed_division);
+            return 0;
+        }
+
         case INSTRUCTION_ADD:
         case INSTRUCTION_SUB:
         case INSTRUCTION_MUL: {
             auto add = static_cast<Instruction_Add *>(inst);
+            auto div = static_cast<Instruction_Div *>(inst);
 
             u8 lhs_reg = maybe_get_instruction_register(add->lhs);
             u8 rhs_reg = maybe_get_instruction_register(add->rhs);

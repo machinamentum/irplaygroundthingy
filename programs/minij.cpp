@@ -50,8 +50,11 @@ struct Token {
 
         KEYWORD_START = 500,
         KEYWORD_FUNC = KEYWORD_START,
-        KEYWORD_VAR = 501,
-        KEYWORD_INT = 502,
+        KEYWORD_VAR,
+        KEYWORD_I64,
+        KEYWORD_I32,
+        KEYWORD_I16,
+        KEYWORD_I8,
 
         KEYWORD_END,
     };
@@ -74,7 +77,11 @@ Token token(u32 type) {
 char *keywords[] = {
     "func",
     "var",
-    "int",
+    "i64",
+    "i32",
+    "i16",
+    "i8",
+
 };
 
 bool starts_identifier(char c) {
@@ -93,6 +100,13 @@ struct Lexer {
     char *buffer;
 
     Token next_token() {
+        while (*buffer && is_whitespace(*buffer)) buffer += 1;
+
+        // skip comments.
+        if (*buffer == '/' && *(buffer+1) == '/') {
+            while (*buffer != '\n' && *buffer != 0) buffer += 1;
+        }
+
         while (*buffer && is_whitespace(*buffer)) buffer += 1;
 
         if (*buffer == 0) return token(Token::END);
@@ -315,6 +329,13 @@ struct Parser {
     }
 
     AST::Expression *parse_primary_expression() {
+        if (peek_token().type == '(') {
+            next_token();
+            auto result = parse_expression();
+            if (!expect_and_eat(')')) return nullptr;
+            return result;
+        }
+
         if (peek_token().type == Token::IDENTIFIER) {
             if (peek_token(1).type == '(') return parse_function_call();
 
@@ -347,11 +368,10 @@ struct Parser {
         }
     }
 
-
-    AST::Expression *parse_binary_expression() {
+    AST::Expression *parse_multiplicative_expression() {
         AST::Expression *expr = parse_primary_expression();
 
-        while (peek_token().type == '+') {
+        while ((peek_token().type == '*') ||  (peek_token().type == '/') || (peek_token().type == '\\')) {
             AST::Binary_Expression *bin = new AST::Binary_Expression();
             bin->operator_type = peek_token().type;
 
@@ -359,6 +379,25 @@ struct Parser {
 
             bin->lhs = expr;
             bin->rhs = parse_primary_expression();
+
+            expr = bin;
+        }
+
+        return expr;
+    }
+
+
+    AST::Expression *parse_binary_expression() {
+        AST::Expression *expr = parse_multiplicative_expression();
+
+        while ((peek_token().type == '+') || (peek_token().type == '-')) {
+            AST::Binary_Expression *bin = new AST::Binary_Expression();
+            bin->operator_type = peek_token().type;
+
+            next_token();
+
+            bin->lhs = expr;
+            bin->rhs = parse_multiplicative_expression();
 
             expr = bin;
         }
@@ -376,9 +415,13 @@ struct Parser {
             return make_pointer_type(parse_type_spec());
         }
 
-        if (peek_token().type == Token::KEYWORD_INT) {
-            next_token();
-            return make_integer_type(4);
+        switch (peek_token().type) {
+            case Token::KEYWORD_I64: next_token(); return make_integer_type(8);
+            case Token::KEYWORD_I32: next_token(); return make_integer_type(4);
+            case Token::KEYWORD_I16: next_token(); return make_integer_type(2);
+            case Token::KEYWORD_I8 : next_token(); return make_integer_type(1);
+            
+            default: break;
         }
 
         printf("Invalid type specfifer: %d\n", peek_token().type);
@@ -497,7 +540,11 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
                 return irm->insert_store(right, left);
             } else {
                 switch(bin->operator_type) {
-                    case '+': return irm->insert_add(left, right);
+                    case '+':  return irm->insert_add(left, right);
+                    case '-':  return irm->insert_sub(left, right);
+                    case '*':  return irm->insert_mul(left, right);
+                    case '/':  return irm->insert_div(left, right, true);
+                    case '\\': return irm->insert_div(left, right, false);
                     default: assert(false);
                 }
             }
