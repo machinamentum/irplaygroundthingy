@@ -1,4 +1,6 @@
 
+// Test
+
 func printf();
 
 func test() {
@@ -18,5 +20,12 @@ func main() {
 
     // Back slash is unsigned division
     i = i \ 2;
+    printf("i: %d\n", i);
+
+    // unary * takes address
+    var p: *i32 = *i;
+
+    // unary < dereferences
+    <p = 456;
     printf("i: %d\n", i);
 }

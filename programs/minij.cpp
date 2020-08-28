@@ -100,16 +100,19 @@ struct Lexer {
     char *buffer;
 
     Token next_token() {
-        while (*buffer && is_whitespace(*buffer)) buffer += 1;
+        while (true) {
+            char *start = buffer;
+            // skip comments.
+            if (*buffer == '/' && *(buffer+1) == '/') {
+                while (*buffer != '\n' && *buffer != 0) buffer += 1;
+            }
 
-        // skip comments.
-        if (*buffer == '/' && *(buffer+1) == '/') {
-            while (*buffer != '\n' && *buffer != 0) buffer += 1;
+            while (*buffer && is_whitespace(*buffer)) buffer += 1;
+
+            if (*buffer == 0) return token(Token::END);
+
+            if (start == buffer) break;
         }
-
-        while (*buffer && is_whitespace(*buffer)) buffer += 1;
-
-        if (*buffer == 0) return token(Token::END);
 
         if (starts_identifier(*buffer)) {
             char *end = buffer;
@@ -204,6 +207,7 @@ namespace AST {
         VARIABLE,
         IDENTIFIER,
         BINARY_EXPRESSION,
+        UNARY_EXPRESSION,
     };
 
     struct Expression {
@@ -219,6 +223,14 @@ namespace AST {
         u32 operator_type;
 
         Expression *lhs;
+        Expression *rhs;
+    };
+
+    struct Unary_Expression : Expression {
+        Unary_Expression() { type = UNARY_EXPRESSION; }
+
+        u32 operator_type;
+
         Expression *rhs;
     };
 
@@ -291,16 +303,15 @@ struct Parser {
     }
 
     bool expect_and_eat(u32 type) {
-        expect(type);
+        bool result = expect(type);
         next_token();
-        return true;
+        return result;
     }
 
     bool expect(u32 type) {
         Token t = peek_token();
         if (t.type != type) {
             printf("Expected token %d but got %d\n", type, t.type);
-            __builtin_debugtrap();
             return false;
         }
 
@@ -368,8 +379,22 @@ struct Parser {
         }
     }
 
+    AST::Expression *parse_unary_expression() {
+        if (peek_token().type == '*' || peek_token().type == '<') {
+            AST::Unary_Expression *unary = new AST::Unary_Expression();
+            unary->operator_type = peek_token().type;
+            next_token();
+
+            unary->rhs = parse_unary_expression();
+            unary->rhs->is_lvalue_use = (unary->operator_type == '*');
+            return unary;
+        }
+
+        return parse_primary_expression();
+    }
+
     AST::Expression *parse_multiplicative_expression() {
-        AST::Expression *expr = parse_primary_expression();
+        AST::Expression *expr = parse_unary_expression();
 
         while ((peek_token().type == '*') ||  (peek_token().type == '/') || (peek_token().type == '\\')) {
             AST::Binary_Expression *bin = new AST::Binary_Expression();
@@ -378,7 +403,7 @@ struct Parser {
             next_token();
 
             bin->lhs = expr;
-            bin->rhs = parse_primary_expression();
+            bin->rhs = parse_unary_expression();
 
             expr = bin;
         }
@@ -439,7 +464,10 @@ struct Parser {
 
             next_token();
 
-            if (!expect_and_eat(':')) return nullptr;
+            if (!expect_and_eat(':')) {
+                printf("Missing type specification for variable '%s'.\n", var->name);
+                return nullptr;
+            }
 
             var->expr_type = parse_type_spec();
             if (!var->expr_type) {
@@ -550,6 +578,21 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
             }
 
             return nullptr;
+        }
+
+        case AST::UNARY_EXPRESSION: {
+            auto unary = static_cast<AST::Unary_Expression *>(expr);
+
+            auto right = emit_expression(unary->rhs, function, unit, irm);
+
+            switch (unary->operator_type) {
+                case '*': return right;
+                case '<': {
+                    if (unary->is_lvalue_use) return right;
+                    return irm->insert_load(right);
+                }
+                default: assert(false); return nullptr;
+            }
         }
 
         case AST::FUNCTION_CALL: {

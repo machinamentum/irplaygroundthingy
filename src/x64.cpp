@@ -609,13 +609,14 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             div->rhs->uses--;
 
             assert(rhs_reg != RAX);
+            assert(rhs_reg != RDX);
 
             if (div->value_type->size >= 2) {
                 maybe_spill_register(function, &code_section->data, &function->register_usage[RDX]);
                 if   (div->signed_division) cwd_cdq(&code_section->data, div->value_type->size);
                 else                        xor_reg64_to_reg64(&code_section->data, RDX, RDX, 8);
             } else {
-                // @TODO sign-extend AL value into AH
+                // @TODO sign-extend AL value into AH for one-byte division
             }
 
             div_reg64_with_rax(&code_section->data, rhs_reg, div->value_type->size, div->signed_division);
