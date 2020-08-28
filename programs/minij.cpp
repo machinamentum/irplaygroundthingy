@@ -189,11 +189,23 @@ namespace AST {
         LITERAL,
         VARIABLE,
         IDENTIFIER,
+        BINARY_EXPRESSION,
     };
 
     struct Expression {
         u32   type;
         Type *expr_type;
+
+        bool is_lvalue_use = false;
+    };
+
+    struct Binary_Expression : Expression {
+        Binary_Expression() { type = BINARY_EXPRESSION; }
+
+        u32 operator_type;
+
+        Expression *lhs;
+        Expression *rhs;
     };
 
     struct Literal : Expression {
@@ -302,7 +314,7 @@ struct Parser {
         return call;
     }
 
-    AST::Expression *parse_expression() {
+    AST::Expression *parse_primary_expression() {
         if (peek_token().type == Token::IDENTIFIER) {
             if (peek_token(1).type == '(') return parse_function_call();
 
@@ -333,8 +345,29 @@ struct Parser {
             next_token();
             return lit;
         }
+    }
 
-        return nullptr;
+
+    AST::Expression *parse_binary_expression() {
+        AST::Expression *expr = parse_primary_expression();
+
+        while (peek_token().type == '+') {
+            AST::Binary_Expression *bin = new AST::Binary_Expression();
+            bin->operator_type = peek_token().type;
+
+            next_token();
+
+            bin->lhs = expr;
+            bin->rhs = parse_primary_expression();
+
+            expr = bin;
+        }
+
+        return expr;
+    }
+
+    AST::Expression *parse_expression() {
+        return parse_binary_expression();
     }
 
     Type *parse_type_spec() {
@@ -383,6 +416,21 @@ struct Parser {
 
 
         AST::Expression *expr = parse_expression();
+
+        if (peek_token().type == '=') {
+            AST::Binary_Expression *bin = new AST::Binary_Expression();
+            bin->operator_type = peek_token().type;
+
+            next_token();
+
+            bin->lhs = expr;
+            bin->rhs = parse_expression();
+
+            bin->lhs->is_lvalue_use = true;
+
+            expr = bin;
+        }
+
         if (!expect_and_eat(';')) return nullptr;
 
         return expr;
@@ -436,6 +484,24 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
                 case AST::Literal::INTEGER: return make_integer_constant(lit->integer_value);
             }
             assert(false);
+            return nullptr;
+        }
+
+        case AST::BINARY_EXPRESSION: {
+            auto bin = static_cast<AST::Binary_Expression *>(expr);
+
+            auto left  = emit_expression(bin->lhs, function, unit, irm);
+            auto right = emit_expression(bin->rhs, function, unit, irm);
+
+            if (bin->operator_type == '=') {
+                return irm->insert_store(right, left);
+            } else {
+                switch(bin->operator_type) {
+                    case '+': return irm->insert_add(left, right);
+                    default: assert(false);
+                }
+            }
+
             return nullptr;
         }
 
@@ -496,7 +562,8 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
                 return nullptr;
             }
 
-            return irm->insert_load(target->storage);
+            if (ident->is_lvalue_use) return target->storage;
+            else                      return irm->insert_load(target->storage);
         }
     }
 }

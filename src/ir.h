@@ -392,6 +392,8 @@ Instruction_Load *make_load(Value *pointer_value) {
 
 inline
 Instruction_Store *make_store(Value *source_value, Value *store_target) {
+    assert(store_target->value_type->type == Type::POINTER);
+
     Instruction_Store *store = new Instruction_Store();
     store->source_value = source_value;
     store->store_target = store_target;
