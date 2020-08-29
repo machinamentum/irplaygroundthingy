@@ -10,6 +10,10 @@ func glfwPollEvents();
 func glClear(flags: i32);
 func glClearColor(r: f32, g: f32, b: f32, a: f32);
 
+func glBegin(flag: i32);
+func glEnd();
+func glVertex3f(x: f32, y: f32, z: f32);
+
 func main() {
     
     glfwInit();
@@ -22,6 +26,12 @@ func main() {
     while (1 - glfwWindowShouldClose(window)) {
         glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
         glClear(16384); // 0x4000
+
+        glBegin(4); // GL_TRIANGLES
+        glVertex3f(0.0f, 0.0f, 0.0f);
+        glVertex3f(1.0f, 0.0f, 0.0f);
+        glVertex3f(1.0f, 1.0f, 0.0f);
+        glEnd();
 
         glfwSwapBuffers(window);
         glfwPollEvents();
