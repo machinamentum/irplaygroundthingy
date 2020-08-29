@@ -1,13 +1,10 @@
 
 #include <stdio.h>
 #include <assert.h>
-
-#include "linker_object.h"
-#include "ir.h"
-
 #include <vector>
-
 #include <stdint.h>
+
+#include "ir.h"
 
 typedef uint64_t u64;
 typedef uint32_t u32;
@@ -56,6 +53,7 @@ struct Token {
         KEYWORD_I16,
         KEYWORD_I8,
         KEYWORD_RETURN,
+        KEYWORD_WHILE,
 
         KEYWORD_END,
 
@@ -85,6 +83,7 @@ char *keywords[] = {
     "i16",
     "i8",
     "return",
+    "while",
 };
 
 bool starts_identifier(char c) {
@@ -215,6 +214,7 @@ namespace AST {
         BINARY_EXPRESSION,
         UNARY_EXPRESSION,
         RETURN,
+        WHILE,
     };
 
     struct Expression {
@@ -290,6 +290,13 @@ namespace AST {
 
     struct Scope {
         std::vector<Expression *> statements;
+    };
+
+    struct While : Expression {
+        While() { type = WHILE; }
+
+        Expression *condition;
+        Scope *body;
     };
 
     struct Function {
@@ -518,6 +525,13 @@ struct Parser {
             if (!expect_and_eat(';')) return nullptr;
 
             return ret;
+        } else if (peek_token().type == Token::KEYWORD_WHILE) {
+            next_token();
+
+            AST::While *wh = new AST::While();
+            wh->condition = parse_expression();
+            wh->body      = parse_scope();
+            return wh;
         }
 
 
@@ -605,7 +619,9 @@ struct IR_Man : IR_Manager {
     Function *debugbreak = nullptr;
 };
 
-Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilation_Unit *unit, IR_Man *irm) {
+void emit_scope(AST::Scope *scope, AST::Function *function, Compilation_Unit *unit, Function *irfunc, IR_Man *irm);
+
+Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilation_Unit *unit, Function *irfunc, IR_Man *irm) {
     switch (expr->type) {
         case AST::LITERAL: {
             auto lit = static_cast<AST::Literal *>(expr);
@@ -621,8 +637,8 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
         case AST::BINARY_EXPRESSION: {
             auto bin = static_cast<AST::Binary_Expression *>(expr);
 
-            auto left  = emit_expression(bin->lhs, function, unit, irm);
-            auto right = emit_expression(bin->rhs, function, unit, irm);
+            auto left  = emit_expression(bin->lhs, function, unit, irfunc, irm);
+            auto right = emit_expression(bin->rhs, function, unit, irfunc, irm);
 
             if (bin->operator_type == '=') {
                 return irm->insert_store(right, left);
@@ -643,7 +659,7 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
         case AST::UNARY_EXPRESSION: {
             auto unary = static_cast<AST::Unary_Expression *>(expr);
 
-            auto right = emit_expression(unary->rhs, function, unit, irm);
+            auto right = emit_expression(unary->rhs, function, unit, irfunc, irm);
 
             switch (unary->operator_type) {
                 case '*': return right;
@@ -661,7 +677,7 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
             Array<Value *> args;
 
             for (auto a : call->arguments) {
-                args.add(emit_expression(a, function, unit, irm));
+                args.add(emit_expression(a, function, unit, irfunc, irm));
             }
 
             Function *target = nullptr;
@@ -687,7 +703,7 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
 
             var->storage = irm->insert_alloca(var->expr_type);
 
-            irm->insert_store(emit_expression(var->initializer, function, unit, irm), var->storage);
+            irm->insert_store(emit_expression(var->initializer, function, unit, irfunc, irm), var->storage);
             return nullptr;
         }
 
@@ -733,9 +749,42 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
         case AST::RETURN: {
             auto ret = static_cast<AST::Return *>(expr);
 
-            if (ret->return_value) return irm->insert_return(emit_expression(ret->return_value, function, unit, irm));
+            if (ret->return_value) return irm->insert_return(emit_expression(ret->return_value, function, unit, irfunc, irm));
             return irm->insert_return();
         }
+
+        case AST::WHILE: {
+            auto wh = static_cast<AST::While *>(expr);
+
+            auto loop_header = new Basic_Block();
+            irfunc->insert(loop_header);
+
+            auto loop_body = new Basic_Block();
+            irfunc->insert(loop_body);
+
+            auto loop_exit = new Basic_Block();
+
+            irm->insert_branch(loop_header);
+
+            irm->set_block(loop_header);
+            auto cond = emit_expression(wh->condition, function, unit, irfunc, irm);
+            irm->insert_branch(cond, loop_body, loop_exit);
+
+            irm->set_block(loop_body);
+            emit_scope(wh->body, function, unit, irfunc, irm);
+            irm->insert_branch(loop_header);
+
+            irfunc->insert(loop_exit);
+            irm->set_block(loop_exit);
+
+            return nullptr;
+        }
+    }
+}
+
+void emit_scope(AST::Scope *scope, AST::Function *function, Compilation_Unit *unit, Function *irfunc, IR_Man *irm) {
+    for (auto expr: scope->statements) {
+        emit_expression(expr, function, unit, irfunc, irm);
     }
 }
 
@@ -820,7 +869,7 @@ int main(int argc, char **argv) {
             irm->set_block(block);
 
             for (auto expr: function->body->statements) {
-                emit_expression(expr, function, &unit, irm);
+                emit_expression(expr, function, &unit, func, irm);
             }
 
             if (!irm->block->has_terminator()) irm->insert_return();
