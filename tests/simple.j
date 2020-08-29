@@ -12,12 +12,16 @@ func test2() -> i32 {
     return 234;
 }
 
+func mul(a: i32, b: i32) -> i32 {
+    return a * b;
+}
+
 func main() {
     // __debugbreak();
     test();
 
     printf("calling test2(): %d\n", test2());
-
+    printf("mul(300, 3): %d\n", mul(300, 3));
 
     var i: i32 = 123;
 

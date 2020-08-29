@@ -4,6 +4,7 @@
 
 #include "linker_object.h"
 
+struct Value;
 struct Function;
 struct Instruction;
 struct Basic_Block;
@@ -11,6 +12,7 @@ struct Basic_Block;
 enum {
     VALUE_CONSTANT,
     VALUE_BASIC_BLOCK,
+    VALUE_ARGUMENT,
 
     INSTRUCTION_FIRST,
     
@@ -85,12 +87,20 @@ Type *make_pointer_type(Type *pointee) {
     return type;
 }
 
+struct Register {
+    u8 machine_reg;
+    bool is_free = true;
+    Value *currently_holding_result_of_instruction = nullptr;
+};
+
 struct Value {
     u32 type;
     Type *value_type;
 
     String name;
     u32 uses = 0;
+    Register *result_stored_in    = nullptr;
+    s32 result_spilled_onto_stack = 0;
 };
 
 struct Constant : Value {
@@ -129,16 +139,7 @@ Constant *make_integer_constant(u64 value, Type *value_type = make_integer_type(
     return con;
 }
 
-struct Register {
-    u8 machine_reg;
-    bool is_free = true;
-    Instruction *currently_holding_result_of_instruction = nullptr;
-};
-
 struct Instruction : Value {
-    Register *result_stored_in    = nullptr;
-    s32 result_spilled_onto_stack = 0;
-
     Basic_Block *inserted_into_block = nullptr;
     u32 insertion_index = 0xFFFFFFFF;
     bool emitted = false;
@@ -250,6 +251,9 @@ struct Global_Value : Constant {
     u32 symbol_index = 0;
 };
 
+struct Argument : Value {
+    Argument() { type = VALUE_ARGUMENT; }
+};
 
 struct Function : Global_Value {
     enum Intrinsics {
@@ -258,7 +262,7 @@ struct Function : Global_Value {
     };
     u32 intrinsic_id = NOT_INTRINSIC;
 
-    Array<Type *> parameter_types;
+    Array<Argument *> arguments;
     Array<Basic_Block *> blocks;
 
     // For code gen
@@ -279,7 +283,7 @@ struct Function : Global_Value {
         return nullptr;
     }
 
-    Register *claim_register(Data_Buffer *dataptr, u8 machine_reg, Instruction *claimer) {
+    Register *claim_register(Data_Buffer *dataptr, u8 machine_reg, Value *claimer) {
         Register *reg = &register_usage[machine_reg];
         void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg);
         maybe_spill_register(this, dataptr, reg);
@@ -316,7 +320,12 @@ struct Compilation_Unit {
     Array<Function *> functions;
 };
 
-
+inline
+Argument *make_arg(Type *type) {
+    Argument *arg = new Argument();
+    arg->value_type = type;
+    return arg;
+}
 
 inline
 Instruction_Branch *make_branch(Value *condition_or_null, Value *true_target, Value *failure_target = nullptr) {

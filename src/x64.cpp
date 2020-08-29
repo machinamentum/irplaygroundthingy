@@ -249,7 +249,7 @@ void imul_reg64_with_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     if (size < 2) size = 2; // @FixMe maybe, imul in this form does not support 1-byte multiplication
 
     u8 op = 0xAF;
-    _two_register_operand_instruction(dataptr, op, true, src, addr_register_disp(dst), size, true);
+    _two_register_operand_instruction(dataptr, op, true, dst, addr_register_disp(src), size, true);
 }
 
 void add_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
@@ -302,7 +302,7 @@ void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
     reg->is_free = true;
 }
 
-Register *get_free_or_suggested_register(Function *function, Data_Buffer *dataptr, u8 suggested_register, bool force_use_suggested, Instruction *inst) {
+Register *get_free_or_suggested_register(Function *function, Data_Buffer *dataptr, u8 suggested_register, bool force_use_suggested, Value *inst) {
     Register *reg = nullptr;
 
     if (!force_use_suggested) {
@@ -337,7 +337,7 @@ Register *get_free_or_suggested_register(Function *function, Data_Buffer *datapt
     return reg;
 }
 
-u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Instruction *inst, u8 suggested_register, bool force_use_suggested) {
+u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Value *inst, u8 suggested_register, bool force_use_suggested) {
     if (auto reg = inst->result_stored_in) {
         assert(reg->currently_holding_result_of_instruction == inst);
         return reg->machine_reg;
@@ -427,6 +427,8 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
         assert(_alloca->stack_offset != 0);
         lea_into_reg64(&code_section->data, reg->machine_reg, addr_register_disp(RBP, _alloca->stack_offset));
         return reg->machine_reg;
+    } else if (value->type == VALUE_ARGUMENT) {
+        return load_instruction_result(function, &code_section->data, value, suggested_register, force_use_suggested);
     } else if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) {
         auto inst = static_cast<Instruction *>(value);
         return load_instruction_result(function, &code_section->data, inst, suggested_register, force_use_suggested);
@@ -913,8 +915,12 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
 
     // R12, R13, R14, and R15 must also be callee-saved in both conventions
 
-    
     move_reg64_to_reg64(&code_section->data, RSP, RBP);
+
+    for (u32 i = 0; i < function->arguments.count; ++i) {
+        Argument *arg = function->arguments[i];
+        function->claim_register(&code_section->data, function->parameter_registers[i], arg);
+    }
 
     for (auto block : function->blocks) {
         for (auto inst : block->instructions) {

@@ -270,7 +270,7 @@ namespace AST {
         char *name;
 
         Expression *initializer = nullptr;
-        Instruction_Alloca *storage;
+        Value *storage;
     };
 
     struct Identifier : Expression {
@@ -469,28 +469,30 @@ struct Parser {
         return nullptr;
     }
 
-    AST::Expression *parse_statement() {
-        if (peek_token().type == Token::KEYWORD_VAR) {
-            next_token();
+    AST::Variable *parse_var(bool param = false) {
+        if (!param) {
+            if (!expect_and_eat(Token::KEYWORD_VAR)) return nullptr;
+        }
 
-            if (!expect(Token::IDENTIFIER)) return nullptr;
+        if (!expect(Token::IDENTIFIER)) return nullptr;
 
-            AST::Variable *var = new AST::Variable();
-            var->name = peek_token().string_value;
+        AST::Variable *var = new AST::Variable();
+        var->name = peek_token().string_value;
 
-            next_token();
+        next_token();
 
-            if (!expect_and_eat(':')) {
-                printf("Missing type specification for variable '%s'.\n", var->name);
-                return nullptr;
-            }
+        if (!expect_and_eat(':')) {
+            printf("Missing type specification for variable '%s'.\n", var->name);
+            return nullptr;
+        }
 
-            var->expr_type = parse_type_spec();
-            if (!var->expr_type) {
-                printf("Expected type specification following ':' in var declaration.\n");
-                return nullptr;
-            }
+        var->expr_type = parse_type_spec();
+        if (!var->expr_type) {
+            printf("Expected type specification following ':' in var declaration.\n");
+            return nullptr;
+        }
 
+        if (!param) {
             if (peek_token().type == '=') {
                 next_token();
 
@@ -498,7 +500,13 @@ struct Parser {
             }
 
             if (!expect_and_eat(';')) return nullptr;
-            return var;
+        }
+        return var;
+    }
+
+    AST::Expression *parse_statement() {
+        if (peek_token().type == Token::KEYWORD_VAR) {
+            return parse_var();
         } else if (peek_token().type == Token::KEYWORD_RETURN) {
             AST::Return *ret = new AST::Return();
             next_token();
@@ -559,7 +567,19 @@ struct Parser {
         next_token();
 
         if (!expect_and_eat('(')) return nullptr;
-        
+
+        while (peek_token().type != ')') {
+
+            AST::Variable *var = parse_var(true);
+            function->arguments.push_back(var);
+
+            if (peek_token().type == ',') {
+                next_token();
+                continue;
+            }
+
+            break;
+        }
 
         if (!expect_and_eat(')')) return nullptr;
 
@@ -686,6 +706,15 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
             }
 
             if (!target) {
+                for (auto var : function->arguments) {
+                    if (strcmp(ident->name, var->name) == 0) {
+                        // parameters are read-only values
+                        return var->storage;
+                    }
+                }
+            }
+
+            if (!target) {
                 printf("No varibale named '%s' in function '%s'.\n", ident->name, function->name);
                 exit(-1);
                 return nullptr;
@@ -777,6 +806,12 @@ int main(int argc, char **argv) {
         func->name = function->name;
         func->value_type = make_func_type(function->return_type);
         unit.functions.add(func);
+
+        for (auto var : function->arguments) {
+            Argument *arg = make_arg(var->expr_type);
+            var->storage = arg;
+            func->arguments.add(arg);
+        }
 
         if (function->body) {
             Basic_Block *block = new Basic_Block();
