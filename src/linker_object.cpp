@@ -1,6 +1,8 @@
 #include "linker_object.h"
 #include "ir.h"
 
+#include <stdio.h>
+
 u32 get_symbol_index(Linker_Object *object, Global_Value *value) {
     if (value->symbol_index == 0) {
         value->symbol_index = static_cast<u32>(object->symbol_table.count);
@@ -85,6 +87,8 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
 
     if (text_index) *text_index = text_sec_index;
     if (data_index) *data_index = data_sec_index;
+
+    printf("Number of .text bytes: %d\n", object->sections[text_sec_index].data.size());
 }
 
 void emit_obj_file(Compilation_Unit *unit) {
@@ -214,7 +218,7 @@ void do_jit_and_run_program_main(Compilation_Unit *unit) {
             else       *(u64 *)target = (u64) symbol_target;
         } else {
             auto symbol_sec    = section_memory[symbol->section_number-1];
-            auto symbol_target = symbol_sec;
+            auto symbol_target = symbol_sec + symbol->section_offset;
 
             if (rip) *(u32 *)target += (u32)(symbol_target - target);
             else     *(u64 *)target += (u64) symbol_target;
