@@ -847,8 +847,6 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                     if (object->target.is_system_v()) {
                         param_reg = float_param_index;
                         float_param_index += 1;
-
-                        printf("Float reg: %d\n", param_reg);
                     }
 
                     maybe_spill_register(function, &code_section->data, &function->xmm_usage[param_reg]);

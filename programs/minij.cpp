@@ -48,6 +48,8 @@ struct Token {
         KEYWORD_START = 500,
         KEYWORD_FUNC = KEYWORD_START,
         KEYWORD_VAR,
+        KEYWORD_F64,
+        KEYWORD_F32,
         KEYWORD_I64,
         KEYWORD_I32,
         KEYWORD_I16,
@@ -67,6 +69,8 @@ struct Token {
         u64    integer_value;
         double float_value;
     };
+
+    bool is_float32 = false;
 };
 
 Token token(u32 type) {
@@ -78,6 +82,8 @@ Token token(u32 type) {
 char *keywords[] = {
     "func",
     "var",
+    "f64",
+    "f32",
     "i64",
     "i32",
     "i16",
@@ -179,10 +185,34 @@ struct Lexer {
             buffer = end+1;
             return t;
         } else if (*buffer >= '0' && *buffer <= '9') {
-            Token tok = token(Token::INTEGER);
+            char *start = buffer;
 
-            tok.integer_value = strtoul(buffer, &buffer, 10);
-            return tok;
+            bool _float = false;
+            while (*start) {
+                if (*start >= '0' && *start <= '9') {
+                    start += 1;
+                    continue;
+                }
+
+                if (*start == '.') _float = true;
+
+                break;
+            }
+
+            if (_float) {
+                Token tok = token(Token::FLOAT);
+                tok.float_value = strtod(buffer, &buffer);
+
+                if (*buffer == 'f') {
+                    tok.is_float32 = true;
+                    buffer += 1;
+                }
+                return tok;
+            } else {
+                Token tok = token(Token::INTEGER);
+                tok.integer_value = strtoul(buffer, &buffer, 10);
+                return tok;
+            }
         } else if (*buffer == '-' && *(buffer+1) == '>') {
             buffer += 2;
             return token(Token::ARROW);
@@ -400,6 +430,18 @@ struct Parser {
             next_token();
             return lit;
         }
+
+        if (peek_token().type == Token::FLOAT) {
+            AST::Literal *lit = new AST::Literal();
+
+            Token t = peek_token();
+            lit->literal_type = AST::Literal::FLOAT;
+            lit->float_value = t.float_value;
+            lit->expr_type = make_float_type(t.is_float32 ? 4 : 8);
+
+            next_token();
+            return lit;
+        }
     }
 
     AST::Expression *parse_unary_expression() {
@@ -464,6 +506,8 @@ struct Parser {
         }
 
         switch (peek_token().type) {
+            case Token::KEYWORD_F64: next_token(); return make_float_type(8);
+            case Token::KEYWORD_F32: next_token(); return make_float_type(4);
             case Token::KEYWORD_I64: next_token(); return make_integer_type(8);
             case Token::KEYWORD_I32: next_token(); return make_integer_type(4);
             case Token::KEYWORD_I16: next_token(); return make_integer_type(2);
@@ -629,6 +673,7 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
             switch (lit->literal_type) {
                 case AST::Literal::STRING : return make_string_constant(lit->string_value);
                 case AST::Literal::INTEGER: return make_integer_constant(lit->integer_value);
+                case AST::Literal::FLOAT  : return make_float_constant(lit->float_value, lit->expr_type);
             }
             assert(false);
             return nullptr;
