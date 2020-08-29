@@ -372,17 +372,13 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
 
             if (object->use_absolute_addressing) {
                 // @Cutnpaste move_imm64_to_reg64
-                code_section->data.append_byte(REX(1, 0, 0, 0));
-                code_section->data.append_byte(0xB8 + reg->machine_reg);
-
+                move_imm64_to_reg64(&code_section->data, data_sec_offset, reg->machine_reg, 8);
+    
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
-                reloc.offset = code_section->data.size();
+                reloc.offset = code_section->data.size() - 8;
                 reloc.symbol_index = data_section->symbol_index;
                 reloc.size = 8;
-
-                u64 *addr = code_section->data.allocate_unaligned<u64>();
-                *addr = data_sec_offset;;
                 reloc.addend = data_sec_offset;
 
                 code_section->relocations.add(reloc);
@@ -712,17 +708,13 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 maybe_spill_register(function, &code_section->data, &function->register_usage[RBX]);
 
                 // @Cutnpaste move_imm64_to_reg64
-                code_section->data.append_byte(REX(1, 0, 0, 0));
-                code_section->data.append_byte(0xB8 + RBX);
+                move_imm64_to_reg64(&code_section->data, 0, RBX);
 
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
-                reloc.offset = code_section->data.size();
+                reloc.offset = code_section->data.size() - 8;
                 reloc.symbol_index = get_symbol_index(object, static_cast<Function *>(call->call_target));
                 reloc.size = 8;
-
-                u64 *addr = code_section->data.allocate_unaligned<u64>();
-                *addr = 0;
                 reloc.addend = 0; // @TODO
 
                 code_section->relocations.add(reloc);
