@@ -143,6 +143,13 @@ struct String {
     }
 };
 
+template <typename T>
+T ensure_aligned(T value, T alignment) {
+    T align_bits = alignment - 1;
+    if (value & align_bits) value += (alignment - (value & align_bits));
+    return value;
+}
+
 struct Data_Buffer {
     struct Chunk {
         u8 *data      = nullptr;
@@ -187,6 +194,20 @@ struct Data_Buffer {
     template<typename T>
     T *allocate_unaligned() {
         return (T *)allocate_bytes_unaligned(sizeof(T));
+    }
+
+    template<typename T>
+    T *allocate() {
+        u32 align = alignof(T);
+
+        Chunk *c = &chunks[chunks.count-1];
+        auto count = ensure_aligned(c->count, align);
+        if (count+sizeof(T) >= c->reserved) c = new_chunk(sizeof(T));
+
+        c->count = ensure_aligned(c->count, align);
+        void *result = c->data+c->count;
+        c->count += sizeof(T);
+        return (T *)result;
     }
 
     void append(Data_Buffer *other) {

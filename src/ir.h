@@ -78,6 +78,15 @@ Type *make_integer_type(u32 size) {
 }
 
 inline
+Type *make_float_type(u32 size) {
+    Type *type      = new Type();
+    type->type      = Type::FLOAT;
+    type->size      = size;
+    type->alignment = size; 
+    return type;
+}
+
+inline
 Type *make_pointer_type(Type *pointee) {
     Type *type = new Type();
     type->type = Type::POINTER;
@@ -108,13 +117,15 @@ struct Constant : Value {
 
     enum {
         STRING,
-        INTEGER
+        INTEGER,
+        FLOAT
     };
 
     u32 constant_type;
 
     String string_value;
-    u64 integer_value;
+    u64    integer_value;
+    double float_value;
 
     bool is_integer() { return constant_type == INTEGER; }
 };
@@ -136,6 +147,17 @@ Constant *make_integer_constant(u64 value, Type *value_type = make_integer_type(
     con->value_type = value_type;
 
     assert(value_type->type == Type::INTEGER);
+    return con;
+}
+
+inline
+Constant *make_float_constant(double value, Type *value_type = make_float_type(8)) {
+    Constant *con = new Constant();
+    con->constant_type = Constant::FLOAT;
+    con->float_value = value;
+    con->value_type = value_type;
+
+    assert(value_type->type == Type::FLOAT);
     return con;
 }
 
@@ -267,40 +289,11 @@ struct Function : Global_Value {
 
     // For code gen
     Array<Register> register_usage;
+    Array<Register> xmm_usage;
 
     // @Temporary this information is the same across all functions,
     // we should put these in Target or something...
     Array<u8>       parameter_registers;
-
-    Register *get_free_register() {
-        for (auto &reg : register_usage) {
-            if (reg.is_free) {
-                reg.is_free = false;
-                return &reg;
-            }
-        }
-
-        return nullptr;
-    }
-
-    Register *claim_register(Data_Buffer *dataptr, u8 machine_reg, Value *claimer) {
-        Register *reg = &register_usage[machine_reg];
-        void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg);
-        maybe_spill_register(this, dataptr, reg);
-
-        if (claimer) {
-            reg->currently_holding_result_of_instruction = claimer;
-            claimer->result_stored_in = reg;
-        }
-
-        reg->is_free = false;
-        return reg;
-    }
-
-    void free_register(Register *reg) {
-        reg->currently_holding_result_of_instruction = nullptr;
-        reg->is_free = true;
-    }
 
 
     Array<u32 *>    stack_size_fixups;

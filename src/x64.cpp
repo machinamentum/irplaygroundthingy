@@ -15,12 +15,23 @@ const u8 RDI = 7;
 const u8 R8  = 8;
 const u8 R9  = 9;
 
-template <typename T>
-T ensure_aligned(T value, T alignment) {
-    T align_bits = alignment - 1;
-    if (value & align_bits) value += (alignment - (value & align_bits));
-    return value;
-}
+const u8 XMM0  = 0;
+const u8 XMM1  = 1;
+const u8 XMM2  = 2;
+const u8 XMM3  = 3;
+const u8 XMM4  = 4;
+const u8 XMM5  = 5;
+const u8 XMM6  = 6;
+const u8 XMM7  = 7;
+const u8 XMM8  = 8;
+const u8 XMM9  = 9;
+const u8 XMM10 = 10;
+const u8 XMM11 = 11;
+const u8 XMM12 = 12;
+const u8 XMM13 = 13;
+const u8 XMM14 = 14;
+const u8 XMM15 = 15;
+
 
 template <typename T, typename B>
 bool fits_into(B b) {
@@ -138,6 +149,34 @@ void _move_bidrectional(Data_Buffer *dataptr, u8 value_reg, Address_Info info, u
     if (!to_memory) op += 0x02;
 
     _two_register_operand_instruction(dataptr, op, false, value_reg, info, size);
+}
+
+void _move_float_bidirectional(Data_Buffer *dataptr, u8 value_reg, Address_Info info, u32 size, bool to_memory) {
+    assert(size == 4 || size == 8);
+
+    u8 op = 0x10;
+    if (to_memory) op += 0x01;
+
+    if (size == 4) dataptr->append_byte(0xF3);
+    else           dataptr->append_byte(0xF2);
+    _two_register_operand_instruction(dataptr, op, false, value_reg, info, size, true);
+}
+
+void move_xmm_to_memory(Data_Buffer *dataptr, u8 src, Address_Info info, u32 size) {
+    _move_float_bidirectional(dataptr, src, info, size, true);
+}
+
+void move_memory_to_xmm(Data_Buffer *dataptr, u8 dst, Address_Info info, u32 size) {
+    _move_float_bidirectional(dataptr, dst, info, size, false);
+}
+
+void move_xmm_to_xmm(Data_Buffer *dataptr, u8 src, u8 dst) {
+    u32 size = 8;
+    u8 op = 0x10;
+
+    if (size == 4) dataptr->append_byte(0xF3);
+    else           dataptr->append_byte(0xF2);
+    _two_register_operand_instruction(dataptr, op, true, dst, addr_register_disp(src), size, true);
 }
 
 void move_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst) {
@@ -285,6 +324,42 @@ void cwd_cdq(Data_Buffer *dataptr, u32 size) {
     _single_register_operand_instruction(dataptr, 0x99, RAX, size);
 }
 
+
+Register *get_free_register(Function *function) {
+    for (auto &reg : function->register_usage) {
+        if (reg.is_free) {
+            reg.is_free = false;
+            return &reg;
+        }
+    }
+
+    return nullptr;
+}
+
+Register *get_free_xmm_register(Function *function) {
+    for (auto &reg : function->xmm_usage) {
+        if (reg.is_free) {
+            reg.is_free = false;
+            return &reg;
+        }
+    }
+
+    return nullptr;
+}
+
+Register *claim_register(Function *func, Data_Buffer *dataptr, Register *reg, Value *claimer) {
+    void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg);
+    maybe_spill_register(func, dataptr, reg);
+
+    if (claimer) {
+        reg->currently_holding_result_of_instruction = claimer;
+        claimer->result_stored_in = reg;
+    }
+
+    reg->is_free = false;
+    return reg;
+}
+
 void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
     if (reg->currently_holding_result_of_instruction) {
         auto inst = reg->currently_holding_result_of_instruction;
@@ -293,7 +368,10 @@ void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
         if (inst->result_spilled_onto_stack == 0 && inst->uses) {
             func->stack_size += 8; // @TargetInfo
             inst->result_spilled_onto_stack = -func->stack_size;
-            move_reg_to_memory(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type->size);
+            if (inst->value_type->type == Type::FLOAT)
+                move_xmm_to_memory(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type->size);
+            else
+                move_reg_to_memory(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type->size);
         }
 
         reg->currently_holding_result_of_instruction = nullptr;
@@ -302,11 +380,16 @@ void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
     reg->is_free = true;
 }
 
+void free_register(Register *reg) {
+    reg->currently_holding_result_of_instruction = nullptr;
+    reg->is_free = true;
+}
+
 Register *get_free_or_suggested_register(Function *function, Data_Buffer *dataptr, u8 suggested_register, bool force_use_suggested, Value *inst) {
     Register *reg = nullptr;
 
     if (!force_use_suggested) {
-        reg = function->get_free_register();
+        reg = get_free_register(function);
         if (!reg) {
 
             u32 uses = U32_MAX;
@@ -331,7 +414,7 @@ Register *get_free_or_suggested_register(Function *function, Data_Buffer *datapt
     if (!reg) reg = &function->register_usage[suggested_register];
     
     maybe_spill_register(function, dataptr, reg);
-    if (inst) return function->claim_register(dataptr, reg->machine_reg, inst);
+    if (inst) return claim_register(function, dataptr, reg, inst);
 
     
     return reg;
@@ -346,7 +429,11 @@ u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Value *inst
         reg = get_free_or_suggested_register(function, dataptr, suggested_register, force_use_suggested, inst);
 
         assert(inst->result_spilled_onto_stack != 0);
-        move_memory_to_reg_zero_ext(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type->size);
+
+        if (inst->value_type->type == Type::FLOAT)
+            move_memory_to_xmm(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type->size);
+        else
+            move_memory_to_reg_zero_ext(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type->size);
         return reg->machine_reg;
     }
 }
@@ -400,6 +487,57 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
             // if (_register != RAX) move_reg64_to_reg64(&code_section->data, RAX, _register);
         } else if (constant->constant_type == Constant::INTEGER) {
             move_imm64_to_reg64(&code_section->data, constant->integer_value, reg->machine_reg, constant->value_type->size);
+        } else if (constant->constant_type == Constant::FLOAT) {
+            Register *xmm = get_free_xmm_register(function);
+            if (!xmm) {
+                xmm = claim_register(function, &code_section->data, &function->xmm_usage[XMM0], value);
+            } else {
+                xmm = claim_register(function, &code_section->data, xmm, value);
+            }
+
+            // copy the float bytes into the data section
+            if (constant->value_type->size == 8) {
+                double *data_target = data_section->data.allocate<double>();
+                *data_target = constant->float_value;
+            } else if (constant->value_type->size == 4) {
+                float *data_target = data_section->data.allocate<float>();
+                *data_target = (float)constant->float_value;
+            } else {
+                assert(false);
+            }
+
+            auto data_sec_offset = data_section->data.size() - constant->value_type->size;
+
+            if (object->use_absolute_addressing) {
+                move_imm64_to_reg64(&code_section->data, data_sec_offset, reg->machine_reg, 8);
+    
+                Relocation reloc;
+                reloc.is_for_rip_call = false;
+                reloc.offset = code_section->data.size() - 8;
+                reloc.symbol_index = data_section->symbol_index;
+                reloc.size = 8;
+                reloc.addend = data_sec_offset;
+
+                code_section->relocations.add(reloc);
+            } else {
+                // lea data-section-location(%rip), %reg
+                s32 *value = lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
+                *value = data_sec_offset;
+
+                Relocation reloc;
+                reloc.is_for_rip_call = false;
+                reloc.is_rip_relative = true;
+                reloc.offset = code_section->data.size() - 4;
+                reloc.symbol_index = data_section->symbol_index;
+                reloc.size = 4;
+
+                code_section->relocations.add(reloc);
+            }
+
+            move_memory_to_xmm(&code_section->data, xmm->machine_reg, addr_register_disp(reg->machine_reg), constant->value_type->size);
+
+            free_register(reg);
+            return xmm->machine_reg;
         }
 
         return reg->machine_reg;
@@ -528,7 +666,10 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
                 assert(target_info.machine_reg != source);
 
-                move_reg_to_memory(&code_section->data, source, target_info, (u8) store->store_target->value_type->pointer_to->size);
+                if (store->store_target->value_type->pointer_to->type == Type::FLOAT)
+                    move_xmm_to_memory(&code_section->data, source, target_info, (u8) store->store_target->value_type->pointer_to->size);
+                else
+                    move_reg_to_memory(&code_section->data, source, target_info, (u8) store->store_target->value_type->pointer_to->size);
             }
 
             store->store_target->uses--;
@@ -548,7 +689,11 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
              Register *reg = get_free_or_suggested_register(function, &code_section->data, RAX, false, inst);
 
             // move_memory_to_reg(&code_section->data, reg->machine_reg, source, 0, load->value_type->size);
-            move_memory_to_reg_zero_ext(&code_section->data, reg->machine_reg, source, load->value_type->size);
+
+            if (load->value_type->type == Type::FLOAT)
+                move_memory_to_xmm(&code_section->data, reg->machine_reg, source, load->value_type->size);
+            else
+                move_memory_to_reg_zero_ext(&code_section->data, reg->machine_reg, source, load->value_type->size);
             return reg->machine_reg;
         }
 
@@ -565,7 +710,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             assert(source.machine_reg != target);
 
-            Register *reg = function->claim_register(&code_section->data, target, inst);
+            Register *reg = claim_register(function, &code_section->data, &function->register_usage[target], inst);
 
             u32 size = gep->pointer_value->value_type->pointer_to->size;
 
@@ -597,7 +742,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             div->lhs->uses--;
 
             // Result always in RAX
-            Register *reg = function->claim_register(&code_section->data, RAX, inst);
+            Register *reg = claim_register(function, &code_section->data, &function->register_usage[RAX], inst);
 
             if (lhs_reg != RAX) {
                 move_reg64_to_reg64(&code_section->data, lhs_reg, RAX);
@@ -636,7 +781,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             Constant *constant = is_constant(add->rhs);
             if (constant && constant->is_integer()) {
-                Register *reg = function->claim_register(&code_section->data, lhs_reg, inst);
+                Register *reg = claim_register(function, &code_section->data, &function->register_usage[lhs_reg], inst);
                 if      (inst->type == INSTRUCTION_ADD) add_imm32_to_reg64   (&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
                 else if (inst->type == INSTRUCTION_SUB) sub_imm32_from_reg64 (&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
                 else if (inst->type == INSTRUCTION_MUL) imul_reg64_with_imm32(&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
@@ -646,7 +791,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             if (rhs_reg == 0xFF) rhs_reg = emit_load_of_value(object, function, code_section, data_section, add->rhs, (lhs_reg == RAX) ? RCX : RAX);
             add->rhs->uses--;
 
-            Register *reg = function->claim_register(&code_section->data, lhs_reg, inst);
+            Register *reg = claim_register(function, &code_section->data, &function->register_usage[lhs_reg], inst);
 
             if      (inst->type == INSTRUCTION_ADD) add_reg64_to_reg64   (&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
             else if (inst->type == INSTRUCTION_SUB) sub_reg64_from_reg64 (&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
@@ -683,15 +828,44 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 maybe_spill_register(function, &code_section->data, &function->register_usage[machine_reg]);
             }
 
+            for (auto &reg : function->xmm_usage) {
+                maybe_spill_register(function, &code_section->data, &reg);
+            }
+
+            u8 num_float_params    = 0;
+            u8 integer_param_index = 0;
+            u8 float_param_index   = 0;
+
             assert(call->parameters.count <= function->parameter_registers.count); // @Incomplete
             for (u32 i = 0; i < call->parameters.count; ++i) {
                 auto p = call->parameters[i];
-                u8 param_reg = function->parameter_registers[i];
-                function->register_usage[param_reg].is_free = false;
+                u8 param_reg = function->parameter_registers[integer_param_index];
+
+                if (p->value_type->type == Type::FLOAT) {
+                    num_float_params += 1;
+
+                    if (object->target.is_system_v()) {
+                        param_reg = float_param_index;
+                        float_param_index += 1;
+
+                        printf("Float reg: %d\n", param_reg);
+                    }
+
+                    maybe_spill_register(function, &code_section->data, &function->xmm_usage[param_reg]);
+                    function->xmm_usage[param_reg].is_free = false;
+                } else {
+                    integer_param_index += 1;
+                    function->register_usage[param_reg].is_free = false;
+                }
 
                 u8 result = emit_load_of_value(object, function, code_section, data_section, p, param_reg, true);
 
-                if (result != param_reg) move_reg64_to_reg64(&code_section->data, result, param_reg);
+                if (result != param_reg) {
+                    if (p->value_type->type == Type::FLOAT)
+                        move_xmm_to_xmm(&code_section->data, result, param_reg);
+                    else
+                        move_reg64_to_reg64(&code_section->data, result, param_reg);
+                }
 
                 p->uses--;
             }
@@ -699,11 +873,11 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             // Spill RAX
             maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
             if (call->value_type->type != Type::VOID)
-                function->claim_register(&code_section->data, RAX, inst);
+                claim_register(function, &code_section->data, &function->register_usage[RAX], inst);
 
             if (object->target.is_system_v()) {
                 // load number of floating point parameters into %al
-                move_imm64_to_reg64(&code_section->data, 0, RAX, 1);
+                move_imm64_to_reg64(&code_section->data, num_float_params, RAX, 1);
             }
 
             if (object->use_absolute_addressing) {
@@ -903,6 +1077,10 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
     function->register_usage.add(make_reg(R8));
     function->register_usage.add(make_reg(R9));
 
+    for (u8 i = 0; i <= XMM15; ++i) {
+        function->xmm_usage.add(make_reg(i));
+    }
+
     // :WastefulPushPops: @Cleanup pushing all the registers we may need is
     // a bit excessive and wasteful.
     push_reg64(&code_section->data, RBP);
@@ -919,7 +1097,7 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
 
     for (u32 i = 0; i < function->arguments.count; ++i) {
         Argument *arg = function->arguments[i];
-        function->claim_register(&code_section->data, function->parameter_registers[i], arg);
+        claim_register(function, &code_section->data, &function->register_usage[function->parameter_registers[i]], arg);
     }
 
     for (auto block : function->blocks) {
