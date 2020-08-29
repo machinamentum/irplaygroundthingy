@@ -166,10 +166,11 @@ void emit_coff_file(Linker_Object *object) {
             memcpy(sym->Name.ShortName, symbol.linkage_name.data, symbol.linkage_name.length);
         } else {
             sym->Name.LongName.Zeroes = 0;
-            sym->Name.LongName.Offset = string_buffer.size();
+            sym->Name.LongName.Offset = string_buffer.size() + 4; // +4 to include the string_table_size field itself.
 
             assert(symbol.linkage_name.length <= U32_MAX);
             string_buffer.append(symbol.linkage_name.data, static_cast<u32>(symbol.linkage_name.length));
+            string_buffer.append_byte(0);
         }
 
         sym->SectionNumber = symbol.section_number;

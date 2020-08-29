@@ -444,6 +444,7 @@ Instruction_Call *make_call(Function *func, const Array_Slice<Value *> &paramete
     Instruction_Call *call = new Instruction_Call();
     call->call_target = func;
     call->value_type = func->value_type->result_type;
+    func->uses++;
 
     for (const auto v : parameters) {
         call->parameters.add(v);
