@@ -21,13 +21,13 @@ set (IR_SRCS
 
 add_library(lib_objects OBJECT ${IR_SRCS})
 
-add_executable(ir src/main.cpp)
-target_link_libraries(ir lib_objects ${CMAKE_THREAD_LIBS_INIT})
-
 if (ENABLE_PROGRAMS)
     add_executable(bf programs/bf.cpp)
     target_link_libraries(bf lib_objects ${CMAKE_THREAD_LIBS_INIT})
 
     add_executable(minij programs/minij.cpp)
     target_link_libraries(minij lib_objects ${CMAKE_THREAD_LIBS_INIT})
+
+    add_executable(old_test programs/old_test.cpp)
+    target_link_libraries(old_test lib_objects ${CMAKE_THREAD_LIBS_INIT})
 endif()

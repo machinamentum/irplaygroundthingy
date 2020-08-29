@@ -30,12 +30,12 @@ void old_test() {
     IR_Manager *irm = new IR_Manager();
     irm->set_block(block);
 
-    auto _alloca = irm->insert_alloca(irm->i8);
+    auto _alloca = irm->insert_alloca(irm->i64);
     irm->insert_store(make_integer_constant(10), _alloca);
 
     {
         auto load = irm->insert_load(_alloca);
-        auto mul = irm->insert_mul(load, make_integer_constant(2, irm->i8));
+        auto mul = irm->insert_mul(load, make_integer_constant(2, irm->i64));
         irm->insert_store(mul, _alloca);
     }
 
@@ -54,7 +54,7 @@ void old_test() {
         irm->set_block(loop_header);
 
         auto load = irm->insert_load(_alloca);
-        auto sub = irm->insert_sub(load, make_integer_constant(1, irm->i8));
+        auto sub = irm->insert_sub(load, make_integer_constant(1, irm->i64));
         irm->insert_store(sub, _alloca);
         irm->insert_branch(load, loop_body, loop_exit);
 
