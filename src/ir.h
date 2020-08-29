@@ -286,6 +286,7 @@ struct Function : Global_Value {
 
     Array<Argument *> arguments;
     Array<Basic_Block *> blocks;
+    bool is_varargs = false;
 
     // For code gen
     Array<Register> register_usage;

@@ -151,7 +151,7 @@ void _move_bidrectional(Data_Buffer *dataptr, u8 value_reg, Address_Info info, u
     _two_register_operand_instruction(dataptr, op, false, value_reg, info, size);
 }
 
-void _move_float_bidirectional(Data_Buffer *dataptr, u8 value_reg, Address_Info info, u32 size, bool to_memory) {
+s32 *_move_float_bidirectional(Data_Buffer *dataptr, u8 value_reg, Address_Info info, u32 size, bool to_memory) {
     assert(size == 4 || size == 8);
 
     u8 op = 0x10;
@@ -159,15 +159,15 @@ void _move_float_bidirectional(Data_Buffer *dataptr, u8 value_reg, Address_Info 
 
     if (size == 4) dataptr->append_byte(0xF3);
     else           dataptr->append_byte(0xF2);
-    _two_register_operand_instruction(dataptr, op, false, value_reg, info, size, true);
+    return _two_register_operand_instruction(dataptr, op, false, value_reg, info, size, true);
 }
 
 void move_xmm_to_memory(Data_Buffer *dataptr, u8 src, Address_Info info, u32 size) {
     _move_float_bidirectional(dataptr, src, info, size, true);
 }
 
-void move_memory_to_xmm(Data_Buffer *dataptr, u8 dst, Address_Info info, u32 size) {
-    _move_float_bidirectional(dataptr, dst, info, size, false);
+s32 *move_memory_to_xmm(Data_Buffer *dataptr, u8 dst, Address_Info info, u32 size) {
+    return _move_float_bidirectional(dataptr, dst, info, size, false);
 }
 
 void move_xmm_to_xmm(Data_Buffer *dataptr, u8 src, u8 dst) {
@@ -177,6 +177,28 @@ void move_xmm_to_xmm(Data_Buffer *dataptr, u8 src, u8 dst) {
     if (size == 4) dataptr->append_byte(0xF3);
     else           dataptr->append_byte(0xF2);
     _two_register_operand_instruction(dataptr, op, true, dst, addr_register_disp(src), size, true);
+}
+
+//66 REX.W 0F 6E /r MOVQ xmm, r/m64
+
+void movq_xmm_to_reg(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
+    assert(size == 4 || size == 8);
+
+    // For whatever reason, this instruction is always prefixed with 0x66 despite not supporting
+    // 16-bit float moves.
+    dataptr->append_byte(0x66);
+
+    _two_register_operand_instruction(dataptr, 0x7E, true, src, addr_register_disp(dst), size, true);
+}
+
+void movq_reg_to_xmm(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
+    assert(size == 4 || size == 8);
+
+    // For whatever reason, this instruction is always prefixed with 0x66 despite not supporting
+    // 16-bit float moves.
+    dataptr->append_byte(0x66);
+
+    _two_register_operand_instruction(dataptr, 0x6E, true, src, addr_register_disp(dst), size, true);
 }
 
 void move_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst) {
@@ -519,9 +541,10 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
                 reloc.addend = data_sec_offset;
 
                 code_section->relocations.add(reloc);
+
+                move_memory_to_xmm(&code_section->data, xmm->machine_reg, addr_register_disp(reg->machine_reg), constant->value_type->size);
             } else {
-                // lea data-section-location(%rip), %reg
-                s32 *value = lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
+                s32 *value = move_memory_to_xmm(&code_section->data, xmm->machine_reg, addr_register_disp(RBP), constant->value_type->size);
                 *value = data_sec_offset;
 
                 Relocation reloc;
@@ -533,8 +556,6 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
 
                 code_section->relocations.add(reloc);
             }
-
-            move_memory_to_xmm(&code_section->data, xmm->machine_reg, addr_register_disp(reg->machine_reg), constant->value_type->size);
 
             free_register(reg);
             return xmm->machine_reg;
@@ -840,13 +861,21 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             for (u32 i = 0; i < call->parameters.count; ++i) {
                 auto p = call->parameters[i];
                 u8 param_reg = function->parameter_registers[integer_param_index];
+                u8 int_param_reg = param_reg;
 
-                if (p->value_type->type == Type::FLOAT) {
+                bool is_float = (p->value_type->type == Type::FLOAT);
+
+                if (is_float) {
                     num_float_params += 1;
 
                     if (object->target.is_system_v()) {
                         param_reg = float_param_index;
                         float_param_index += 1;
+                    } else if (object->target.is_win32()) {
+                        function->register_usage[param_reg].is_free = false;
+
+                        param_reg = integer_param_index;
+                        integer_param_index += 1;
                     }
 
                     maybe_spill_register(function, &code_section->data, &function->xmm_usage[param_reg]);
@@ -856,13 +885,18 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                     function->register_usage[param_reg].is_free = false;
                 }
 
-                u8 result = emit_load_of_value(object, function, code_section, data_section, p, param_reg, true);
+                u8 result = emit_load_of_value(object, function, code_section, data_section, p, int_param_reg, true);
 
                 if (result != param_reg) {
-                    if (p->value_type->type == Type::FLOAT)
+                    if (is_float)
                         move_xmm_to_xmm(&code_section->data, result, param_reg);
                     else
                         move_reg64_to_reg64(&code_section->data, result, param_reg);
+                }
+
+                if (is_float && object->target.is_win32() && function_target->is_varargs && i >= function_target->arguments.count) {
+                    // move float value into corresponding integer register slot
+                    movq_xmm_to_reg(&code_section->data, param_reg, int_param_reg, 8);
                 }
 
                 p->uses--;

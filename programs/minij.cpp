@@ -1,3 +1,45 @@
+/*
+
+minij: a mini compiler suitable for general software
+development. The goal here is to develop a small,
+self-contained compiler project such that it is trivially
+adaptable to develop, or use, a new compiler-backend with.
+The expression of this goal is the use of this project
+to develop the irplaygroundthingy library, but it should
+also be fairly straightforward to replace the use of the
+IR library with LLVM, or a custom machine code or assembly
+emitter, or a bytecode interpreter.
+
+Language:
+The syntax is similar to Jiyu, Swift, and other declarator-
+focused languages. There are no signed types in this language;
+instead there are two division operators, '/' for signed division,
+'\' for unsigned division. Specifiable primitive types are thus:
+i64
+i32
+i16
+i8
+f64
+f32
+
+A simplified example:
+
+func printf();
+
+func main(argc: i32, argv: **i8) -> i32 {
+    var i: i32 = 1;
+
+    i = i * 3;
+    printf("i: %d\n", i);
+    return i;
+}
+
+Note that there is no semantic analysis, yet. Most
+of the type-verification will be done within the IR
+library at this point.
+
+*/
+
 
 #include <stdio.h>
 #include <assert.h>
@@ -59,7 +101,8 @@ struct Token {
 
         KEYWORD_END,
 
-        ARROW, // ->
+        ARROW = 600, // ->
+        DOTDOTDOT, // ...
     };
 
     u32 type;
@@ -216,6 +259,9 @@ struct Lexer {
         } else if (*buffer == '-' && *(buffer+1) == '>') {
             buffer += 2;
             return token(Token::ARROW);
+        } else if (*buffer == '.' && *(buffer+1) == '.' && *(buffer+2) == '.') {
+            buffer += 3;
+            return token(Token::DOTDOTDOT);
         }
 
         Token t = token(*buffer);
@@ -334,6 +380,7 @@ namespace AST {
 
         std::vector<Variable *> arguments;
         Type *return_type;
+        bool is_varargs = false;
 
         Scope *body;
     };
@@ -628,6 +675,12 @@ struct Parser {
 
         while (peek_token().type != ')') {
 
+            if (peek_token().type == Token::DOTDOTDOT) {
+                function->is_varargs = true;
+                next_token();
+                break;
+            }
+
             AST::Variable *var = parse_var(true);
             function->arguments.push_back(var);
 
@@ -727,7 +780,7 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
 
             Function *target = nullptr;
 
-            if (strcmp("__debugbreak", call->call_target_name) == 0) {
+            if (false) {
                 target = irm->debugbreak;
             } else {
                 for (auto func : unit->functions) {
@@ -896,9 +949,12 @@ int main(int argc, char **argv) {
     irm->debugbreak = debugbreak;
 
     for (auto function : functions) {
+        // if (strcmp(function->name, "__debugbreak") == 0) continue;
+
         Function *func = new Function();
         func->name = function->name;
         func->value_type = make_func_type(function->return_type);
+        func->is_varargs = function->is_varargs;
         unit.functions.add(func);
 
         for (auto var : function->arguments) {

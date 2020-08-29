@@ -2,7 +2,7 @@
 // builtin, will translate to an intrinsic call to the IR library's debug interrupt intrinsic
 func __debugbreak();
 
-func printf();
+func printf(fmt: *i8, ...);
 
 func test() {
     printf("hello world!\n");
@@ -41,4 +41,6 @@ func main() {
     // unary < dereferences
     <p = 456;
     printf("i: %d\n", i);
+
+    printf("Float: %f\n", 1.0);
 }
