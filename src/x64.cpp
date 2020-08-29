@@ -388,7 +388,8 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
                 code_section->relocations.add(reloc);
             } else {
                 // lea data-section-location(%rip), %reg
-                lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
+                s32 *value = lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
+                *value = data_sec_offset;
 
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
@@ -751,9 +752,19 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
         }
 
         case INSTRUCTION_RETURN: {
+            Instruction_Return *ret = static_cast<Instruction_Return *>(inst);
+
             u32 *stack_size_target = add_imm32_to_reg64(&code_section->data, RSP, 0, 8);
             function->stack_size_fixups.add(stack_size_target);
 
+            if (ret->return_value) {
+                u8 lhs_reg = maybe_get_instruction_register(ret->return_value);
+
+                if (lhs_reg == 0xFF) lhs_reg = emit_load_of_value(object, function, code_section, data_section, ret->return_value, RAX, true);
+                ret->return_value->uses--;
+
+                if (lhs_reg != RAX) move_reg64_to_reg64(&code_section->data, lhs_reg, RAX);
+            }
 
             // :WastefulPushPops:
             // pop in reverse order

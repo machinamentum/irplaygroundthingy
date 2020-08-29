@@ -453,6 +453,7 @@ Instruction_Call *make_call(Function *func, const Array_Slice<Value *> &paramete
 inline
 Instruction_Return *make_return(Value *retval = nullptr) {
     Instruction_Return *ret = new Instruction_Return();
+    ret->return_value = retval;
     if (retval) retval->uses++;
     return ret;
 }
