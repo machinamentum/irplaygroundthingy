@@ -55,8 +55,11 @@ struct Token {
         KEYWORD_I32,
         KEYWORD_I16,
         KEYWORD_I8,
+        KEYWORD_RETURN,
 
         KEYWORD_END,
+
+        ARROW, // ->
     };
 
     u32 type;
@@ -81,7 +84,7 @@ char *keywords[] = {
     "i32",
     "i16",
     "i8",
-
+    "return",
 };
 
 bool starts_identifier(char c) {
@@ -181,6 +184,9 @@ struct Lexer {
 
             tok.integer_value = strtoul(buffer, &buffer, 10);
             return tok;
+        } else if (*buffer == '-' && *(buffer+1) == '>') {
+            buffer += 2;
+            return token(Token::ARROW);
         }
 
         Token t = token(*buffer);
@@ -208,6 +214,7 @@ namespace AST {
         IDENTIFIER,
         BINARY_EXPRESSION,
         UNARY_EXPRESSION,
+        RETURN,
     };
 
     struct Expression {
@@ -215,6 +222,12 @@ namespace AST {
         Type *expr_type;
 
         bool is_lvalue_use = false;
+    };
+
+    struct Return : Expression {
+        Return() { type = RETURN; }
+
+        Expression *return_value = nullptr;
     };
 
     struct Binary_Expression : Expression {
@@ -281,6 +294,9 @@ namespace AST {
 
     struct Function {
         char *name;
+
+        std::vector<Variable *> arguments;
+        Type *return_type;
 
         Scope *body;
     };
@@ -483,6 +499,17 @@ struct Parser {
 
             if (!expect_and_eat(';')) return nullptr;
             return var;
+        } else if (peek_token().type == Token::KEYWORD_RETURN) {
+            AST::Return *ret = new AST::Return();
+            next_token();
+
+            if (peek_token().type  != ';') {
+                ret->return_value = parse_expression();
+            }
+
+            if (!expect_and_eat(';')) return nullptr;
+
+            return ret;
         }
 
 
@@ -532,8 +559,17 @@ struct Parser {
         next_token();
 
         if (!expect_and_eat('(')) return nullptr;
-        // @TODO
+        
+
         if (!expect_and_eat(')')) return nullptr;
+
+        if (peek_token().type == Token::ARROW) {
+            next_token();
+
+            function->return_type = parse_type_spec();
+        } else {
+            function->return_type = make_void_type();
+        }
 
         if (peek_token().type == '{') {
             function->body = parse_scope();
@@ -545,7 +581,11 @@ struct Parser {
     }
 };
 
-Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilation_Unit *unit, IR_Manager *irm) {
+struct IR_Man : IR_Manager {
+    Function *debugbreak = nullptr;
+};
+
+Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilation_Unit *unit, IR_Man *irm) {
     switch (expr->type) {
         case AST::LITERAL: {
             auto lit = static_cast<AST::Literal *>(expr);
@@ -605,10 +645,15 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
             }
 
             Function *target = nullptr;
-            for (auto func : unit->functions) {
-                if (strcmp(call->call_target_name, func->name.data) == 0) {
-                    target = func;
-                    break;
+
+            if (strcmp("__debugbreak", call->call_target_name) == 0) {
+                target = irm->debugbreak;
+            } else {
+                for (auto func : unit->functions) {
+                    if (strcmp(call->call_target_name, func->name.data) == 0) {
+                        target = func;
+                        break;
+                    }
                 }
             }
 
@@ -654,6 +699,13 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
 
             if (ident->is_lvalue_use) return target->storage;
             else                      return irm->insert_load(target->storage);
+        }
+
+        case AST::RETURN: {
+            auto ret = static_cast<AST::Return *>(expr);
+
+            if (ret->return_value) return irm->insert_return(emit_expression(ret->return_value, function, unit, irm));
+            return irm->insert_return();
         }
     }
 }
@@ -713,24 +765,30 @@ int main(int argc, char **argv) {
     Compilation_Unit unit;
     unit.target = get_host_target();
 
+    IR_Man *irm = new IR_Man();
+    Function *debugbreak = new Function();
+    debugbreak->intrinsic_id = Function::DEBUG_BREAK;
+    debugbreak->value_type = make_func_type(make_void_type());
+
+    irm->debugbreak = debugbreak;
+
     for (auto function : functions) {
         Function *func = new Function();
         func->name = function->name;
-        func->value_type = make_func_type(make_void_type());
+        func->value_type = make_func_type(function->return_type);
         unit.functions.add(func);
 
         if (function->body) {
             Basic_Block *block = new Basic_Block();
             func->insert(block);
 
-            IR_Manager *irm = new IR_Manager();
             irm->set_block(block);
 
             for (auto expr: function->body->statements) {
                 emit_expression(expr, function, &unit, irm);
             }
 
-            irm->insert_return();
+            if (!irm->block->has_terminator()) irm->insert_return();
         }
     }
 

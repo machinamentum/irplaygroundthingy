@@ -1,5 +1,6 @@
 
-// Test
+// builtin, will translate to an intrinsic call to the IR library's debug interrupt intrinsic
+func __debugbreak();
 
 func printf();
 
@@ -7,8 +8,16 @@ func test() {
     printf("hello world!\n");
 }
 
+func test2() -> i32 {
+    return 234;
+}
+
 func main() {
+    // __debugbreak();
     test();
+
+    printf("calling test2(): %d\n", test2());
+
 
     var i: i32 = 123;
 
