@@ -39,6 +39,12 @@ bool fits_into(B b) {
     return ((B)a) == b;
 }
 
+template<typename T, typename B>
+T trunc(B value) {
+    assert((fits_into<T, B>(value)));
+    return static_cast<T>(value);
+}
+
 struct Address_Info {
     u8 machine_reg = 0xFF;
     s32 disp       = 0;
@@ -131,7 +137,7 @@ s32 *_two_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, bool is_
 
     if (mod == MOD_INDIRECT_8BIT_DISP) {
         s8 *disp = dataptr->allocate_unaligned<s8>();
-        *disp = operand2.disp; // @TODO ensure this fits
+        *disp = trunc<s8>(operand2.disp);
         return nullptr;
     }
 
@@ -220,24 +226,24 @@ u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 value, u8 reg, u32 size = 8) 
     
     u8 *operand = (u8 *)dataptr->allocate_bytes_unaligned(size);
     
-    if (size == 1) *       operand = static_cast<u8> (value);
-    if (size == 2) *(u16 *)operand = static_cast<u16>(value);
-    if (size == 4) *(u32 *)operand = static_cast<u32>(value);
+    if (size == 1) *       operand = trunc<u8> (value);
+    if (size == 2) *(u16 *)operand = trunc<u16>(value);
+    if (size == 4) *(u32 *)operand = trunc<u32>(value);
     if (size == 8) *(u64 *)operand = value;
 
     return (u64 *)operand;
 }
 
-void move_imm32_sext_to_memory(Data_Buffer *dataptr, u32 value, Address_Info info, u32 size) {
+void move_imm32_sext_to_memory(Data_Buffer *dataptr, s32 value, Address_Info info, u32 size) {
     u8 op = (size == 1) ? 0xC6 : 0xC7;
     _two_register_operand_instruction(dataptr, op, false, RAX, info, size);
 
     if (size > 4) size = 4;
-    u8 *operand = (u8 *)dataptr->allocate_bytes_unaligned(size);
+    s8 *operand = (s8 *)dataptr->allocate_bytes_unaligned(size);
     
-    if (size == 1) *       operand = static_cast<u8> (value);
-    if (size == 2) *(u16 *)operand = static_cast<u16>(value);
-    if (size == 4 || size == 8) *(u32 *)operand = value;
+    if (size == 1) *       operand = trunc<s8> (value);
+    if (size == 2) *(s16 *)operand = trunc<s16>(value);
+    if (size == 4 || size == 8) *(s32 *)operand = value;
 }
 
 void move_memory_to_reg_zero_ext(Data_Buffer *dataptr, u8 value_reg, Address_Info info, u32 size) {
@@ -268,7 +274,7 @@ void push_reg64(Data_Buffer *dataptr, u8 reg, u8 size = 8) {
     _single_register_operand_instruction(dataptr, 0x50, reg, size);
 }
 
-u32 *_mathop_imm32_reg64(Data_Buffer *dataptr, u8 reg, u32 value, u32 size, u8 op_select) {
+s32 *_mathop_imm32_reg64(Data_Buffer *dataptr, u8 reg, s32 value, u32 size, u8 op_select) {
     u8 op = (size == 1) ? 0x80 : 0x81;
     _two_register_operand_instruction(dataptr, op, true, op_select, addr_register_disp(reg), size);
 
@@ -277,33 +283,33 @@ u32 *_mathop_imm32_reg64(Data_Buffer *dataptr, u8 reg, u32 value, u32 size, u8 o
     
     if (size == 1) *       operand = static_cast<u8> (value);
     if (size == 2) *(u16 *)operand = static_cast<u16>(value);
-    if (size == 4 || size == 8) *(u32 *)operand = value;
+    if (size == 4 || size == 8) *(s32 *)operand = value;
 
-    return (u32 *)operand;
+    return (s32 *)operand;
 }
 
 const u8 MATH_OP_SELECT_SUB = 5;
 const u8 MATH_OP_SELECT_ADD = 0;
 
-u32 *sub_imm32_from_reg64(Data_Buffer *dataptr, u8 reg, u32 value, u32 size) {
+s32 *sub_imm32_from_reg64(Data_Buffer *dataptr, u8 reg, s32 value, u32 size) {
     return _mathop_imm32_reg64(dataptr, reg, value, size, MATH_OP_SELECT_SUB);
 }
 
-u32 *add_imm32_to_reg64(Data_Buffer *dataptr, u8 reg, u32 value, u32 size) {
+s32 *add_imm32_to_reg64(Data_Buffer *dataptr, u8 reg, s32 value, u32 size) {
     return _mathop_imm32_reg64(dataptr, reg, value, size, MATH_OP_SELECT_ADD);
 }
 
-void imul_reg64_with_imm32(Data_Buffer *dataptr, u8 reg, u32 value, u32 size) {
+void imul_reg64_with_imm32(Data_Buffer *dataptr, u8 reg, s32 value, u32 size) {
     if (size < 2) size = 2; // @FixMe maybe, imul in this form does not support 1-byte multiplication
 
     u8 op = 0x69;
     _two_register_operand_instruction(dataptr, op, true, reg, addr_register_disp(reg), size);
 
     if (size > 4) size = 4;
-    u8 *operand = (u8 *)dataptr->allocate_bytes_unaligned(size);
+    s8 *operand = (s8 *)dataptr->allocate_bytes_unaligned(size);
 
-    if (size == 2) *(u16 *)operand = static_cast<u16>(value);
-    if (size == 4 || size == 8) *(u32 *)operand = value;
+    if (size == 2) *(s16 *)operand = static_cast<s16>(value);
+    if (size == 4 || size == 8) *(s32 *)operand = value;
 }
 
 void imul_reg64_with_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
@@ -346,6 +352,19 @@ void cwd_cdq(Data_Buffer *dataptr, u32 size) {
     _single_register_operand_instruction(dataptr, 0x99, RAX, size);
 }
 
+void move_memory_value_to_register(Data_Buffer *dataptr, u8 value_reg, Address_Info info, Type *type) {
+    if (type->type == Type::FLOAT)
+            move_memory_to_xmm(dataptr, value_reg, info, type->size);
+        else
+            move_memory_to_reg_zero_ext(dataptr, value_reg, info, type->size);
+}
+
+void move_register_value_to_memory(Data_Buffer *dataptr, u8 value_reg, Address_Info info, Type *type) {
+    if (type->type == Type::FLOAT)
+        move_xmm_to_memory(dataptr, value_reg, info, type->size);
+    else
+        move_reg_to_memory(dataptr, value_reg, info, type->size);
+}
 
 Register *get_free_register(Function *function) {
     for (auto &reg : function->register_usage) {
@@ -390,10 +409,7 @@ void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
         if (inst->result_spilled_onto_stack == 0 && inst->uses) {
             func->stack_size += 8; // @TargetInfo
             inst->result_spilled_onto_stack = -func->stack_size;
-            if (inst->value_type->type == Type::FLOAT)
-                move_xmm_to_memory(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type->size);
-            else
-                move_reg_to_memory(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type->size);
+            move_register_value_to_memory(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type);
         }
 
         reg->currently_holding_result_of_instruction = nullptr;
@@ -451,11 +467,7 @@ u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Value *inst
         reg = get_free_or_suggested_register(function, dataptr, suggested_register, force_use_suggested, inst);
 
         assert(inst->result_spilled_onto_stack != 0);
-
-        if (inst->value_type->type == Type::FLOAT)
-            move_memory_to_xmm(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type->size);
-        else
-            move_memory_to_reg_zero_ext(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type->size);
+        move_memory_value_to_register(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type);
         return reg->machine_reg;
     }
 }
@@ -469,7 +481,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
         reg->is_free = false;
 
         if (constant->constant_type == Constant::STRING) {
-            auto data_sec_offset = data_section->data.size();
+            u32 data_sec_offset = data_section->data.size();
 
             // copy the string characters into the data section
             assert(constant->string_value.length <= U32_MAX);
@@ -480,7 +492,6 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
 
 
             if (object->use_absolute_addressing) {
-                // @Cutnpaste move_imm64_to_reg64
                 move_imm64_to_reg64(&code_section->data, data_sec_offset, reg->machine_reg, 8);
     
                 Relocation reloc;
@@ -488,13 +499,13 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
                 reloc.offset = code_section->data.size() - 8;
                 reloc.symbol_index = data_section->symbol_index;
                 reloc.size = 8;
-                reloc.addend = data_sec_offset;
+                reloc.addend = static_cast<u64>(data_sec_offset);
 
                 code_section->relocations.add(reloc);
             } else {
                 // lea data-section-location(%rip), %reg
                 s32 *value = lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
-                *value = data_sec_offset;
+                *value = static_cast<s32>(data_sec_offset);
 
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
@@ -528,7 +539,8 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
                 assert(false);
             }
 
-            auto data_sec_offset = data_section->data.size() - constant->value_type->size;
+            u32 data_sec_offset = data_section->data.size() - constant->value_type->size;
+            assert(data_sec_offset >= 0);
 
             if (object->use_absolute_addressing) {
                 move_imm64_to_reg64(&code_section->data, data_sec_offset, reg->machine_reg, 8);
@@ -538,14 +550,14 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
                 reloc.offset = code_section->data.size() - 8;
                 reloc.symbol_index = data_section->symbol_index;
                 reloc.size = 8;
-                reloc.addend = data_sec_offset;
+                reloc.addend = static_cast<u64>(data_sec_offset);
 
                 code_section->relocations.add(reloc);
 
                 move_memory_to_xmm(&code_section->data, xmm->machine_reg, addr_register_disp(reg->machine_reg), constant->value_type->size);
             } else {
                 s32 *value = move_memory_to_xmm(&code_section->data, xmm->machine_reg, addr_register_disp(RBP), constant->value_type->size);
-                *value = data_sec_offset;
+                *value = static_cast<s32>(data_sec_offset);
 
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
@@ -679,18 +691,14 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             Constant *constant = is_constant(store->source_value);
             if (constant && constant->is_integer()) {
-                // @TODO ensure this fits
-                move_imm32_sext_to_memory(&code_section->data, constant->integer_value, target_info, store->store_target->value_type->pointer_to->size);
+                s32 value = trunc<s32>(static_cast<s64>(constant->integer_value));
+                move_imm32_sext_to_memory(&code_section->data, value, target_info, store->store_target->value_type->pointer_to->size);
             } else {
                 u8 source = maybe_get_instruction_register(store->source_value);
                 if (source == 0xFF) source = emit_load_of_value(object, function, code_section, data_section, store->source_value, (target_info.machine_reg == RAX) ? RCX : RAX);
 
                 assert(target_info.machine_reg != source);
-
-                if (store->store_target->value_type->pointer_to->type == Type::FLOAT)
-                    move_xmm_to_memory(&code_section->data, source, target_info, (u8) store->store_target->value_type->pointer_to->size);
-                else
-                    move_reg_to_memory(&code_section->data, source, target_info, (u8) store->store_target->value_type->pointer_to->size);
+                move_register_value_to_memory(&code_section->data, source, target_info, store->store_target->value_type->pointer_to);
             }
 
             store->store_target->uses--;
@@ -709,12 +717,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             load->pointer_value->uses--;
              Register *reg = get_free_or_suggested_register(function, &code_section->data, RAX, false, inst);
 
-            // move_memory_to_reg(&code_section->data, reg->machine_reg, source, 0, load->value_type->size);
-
-            if (load->value_type->type == Type::FLOAT)
-                move_memory_to_xmm(&code_section->data, reg->machine_reg, source, load->value_type->size);
-            else
-                move_memory_to_reg_zero_ext(&code_section->data, reg->machine_reg, source, load->value_type->size);
+            move_memory_value_to_register(&code_section->data, reg->machine_reg, source, load->value_type);
             return reg->machine_reg;
         }
 
@@ -736,7 +739,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             u32 size = gep->pointer_value->value_type->pointer_to->size;
 
             if (size > 8) {
-                imul_reg64_with_imm32(&code_section->data, reg->machine_reg, gep->pointer_value->value_type->pointer_to->size, 8);
+                imul_reg64_with_imm32(&code_section->data, reg->machine_reg, static_cast<s32>(gep->pointer_value->value_type->pointer_to->size), 8);
                 size = 1;
             }
 
@@ -763,7 +766,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             div->lhs->uses--;
 
             // Result always in RAX
-            Register *reg = claim_register(function, &code_section->data, &function->register_usage[RAX], inst);
+            claim_register(function, &code_section->data, &function->register_usage[RAX], inst);
 
             if (lhs_reg != RAX) {
                 move_reg64_to_reg64(&code_section->data, lhs_reg, RAX);
@@ -792,7 +795,6 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
         case INSTRUCTION_SUB:
         case INSTRUCTION_MUL: {
             auto add = static_cast<Instruction_Add *>(inst);
-            auto div = static_cast<Instruction_Div *>(inst);
 
             u8 lhs_reg = maybe_get_instruction_register(add->lhs);
             u8 rhs_reg = maybe_get_instruction_register(add->rhs);
@@ -802,17 +804,19 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             Constant *constant = is_constant(add->rhs);
             if (constant && constant->is_integer()) {
-                Register *reg = claim_register(function, &code_section->data, &function->register_usage[lhs_reg], inst);
-                if      (inst->type == INSTRUCTION_ADD) add_imm32_to_reg64   (&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
-                else if (inst->type == INSTRUCTION_SUB) sub_imm32_from_reg64 (&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
-                else if (inst->type == INSTRUCTION_MUL) imul_reg64_with_imm32(&code_section->data, lhs_reg, constant->integer_value, add->value_type->size);
+                claim_register(function, &code_section->data, &function->register_usage[lhs_reg], inst);
+                s64 value = static_cast<s64>(constant->integer_value);
+
+                if      (inst->type == INSTRUCTION_ADD) add_imm32_to_reg64   (&code_section->data, lhs_reg, trunc<s32>(value), add->value_type->size);
+                else if (inst->type == INSTRUCTION_SUB) sub_imm32_from_reg64 (&code_section->data, lhs_reg, trunc<s32>(value), add->value_type->size);
+                else if (inst->type == INSTRUCTION_MUL) imul_reg64_with_imm32(&code_section->data, lhs_reg, trunc<s32>(value), add->value_type->size);
                 return 0;
             }
 
             if (rhs_reg == 0xFF) rhs_reg = emit_load_of_value(object, function, code_section, data_section, add->rhs, (lhs_reg == RAX) ? RCX : RAX);
             add->rhs->uses--;
 
-            Register *reg = claim_register(function, &code_section->data, &function->register_usage[lhs_reg], inst);
+            claim_register(function, &code_section->data, &function->register_usage[lhs_reg], inst);
 
             if      (inst->type == INSTRUCTION_ADD) add_reg64_to_reg64   (&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
             else if (inst->type == INSTRUCTION_SUB) sub_reg64_from_reg64 (&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
@@ -954,7 +958,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
         case INSTRUCTION_RETURN: {
             Instruction_Return *ret = static_cast<Instruction_Return *>(inst);
 
-            u32 *stack_size_target = add_imm32_to_reg64(&code_section->data, RSP, 0, 8);
+            s32 *stack_size_target = add_imm32_to_reg64(&code_section->data, RSP, 0, 8);
             function->stack_size_fixups.add(stack_size_target);
 
             if (ret->return_value) {
@@ -1153,14 +1157,14 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
     }
 
 
-    u32 *stack_size_target = sub_imm32_from_reg64(&code_section->data, RSP, 0, 8);
+    s32 *stack_size_target = sub_imm32_from_reg64(&code_section->data, RSP, 0, 8);
     function->stack_size_fixups.add(stack_size_target);
 
     // Touch stack pages from top to bottom
     // to release stack pages from the page guard system.
     if (object->target.is_win32()) {
-        u64 *move_stack_size_to_rax = move_imm64_to_reg64(&code_section->data, 0, RAX);
-        function->stack_size_fixups.add(reinterpret_cast<u32 *>(move_stack_size_to_rax));
+        s32 *move_stack_size_to_rax = (s32 *)move_imm64_to_reg64(&code_section->data, 0, RAX, 4); // 4-byte immediate
+        function->stack_size_fixups.add(move_stack_size_to_rax);
 
         auto loop_start = code_section->data.size();
         sub_imm32_from_reg64(&code_section->data, RAX, 4096, 8);
@@ -1212,6 +1216,6 @@ void emit_function(Linker_Object *object, Section *code_section, Section *data_s
 
     assert(function->stack_size >= 0);
     for (auto fixup : function->stack_size_fixups) {
-        *fixup = static_cast<u32>(function->stack_size);
+        *fixup = function->stack_size;
     }
 }

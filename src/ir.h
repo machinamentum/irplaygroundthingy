@@ -297,7 +297,7 @@ struct Function : Global_Value {
     Array<u8>       parameter_registers;
 
 
-    Array<u32 *>    stack_size_fixups;
+    Array<s32 *>    stack_size_fixups;
     s32 stack_size = 0;
     s32 largest_call_stack_adjustment = 0;
 
