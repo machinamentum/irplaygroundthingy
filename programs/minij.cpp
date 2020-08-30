@@ -58,6 +58,18 @@ typedef int32_t  s32;
 typedef int16_t  s16;
 typedef int8_t   s8;
 
+template <typename T, typename B>
+bool fits_into(B b) {
+    T a = (T)b;
+    return ((B)a) == b;
+}
+
+template<typename T, typename B>
+T trunc(B value) {
+    assert((fits_into<T, B>(value)));
+    return static_cast<T>(value);
+}
+
 char *get_file_contents(char *path) {
     FILE *file = fopen(path, "rb");
     if (!file) return nullptr;
@@ -116,13 +128,15 @@ struct Token {
     bool is_float32 = false;
 };
 
+
+
 Token token(u32 type) {
     Token t;
     t.type = type;
     return t;
 }
 
-char *keywords[] = {
+const char *keywords[] = {
     "func",
     "var",
     "f64",
@@ -173,7 +187,7 @@ struct Lexer {
                 else break;
             }
 
-            auto length = end - buffer;
+            size_t length = static_cast<size_t>(end - buffer);
             u32 type = Token::IDENTIFIER;
             for (u32 i = 0; i < (Token::KEYWORD_END - Token::KEYWORD_START); ++i) {
                 if (strncmp(buffer, keywords[i], strlen(keywords[i])) == 0) {
@@ -200,7 +214,7 @@ struct Lexer {
 
             Token t = token(Token::STRING);
 
-            auto length = end - buffer;
+            size_t length = static_cast<size_t>(end - buffer);
             char *value = (char *)malloc(length + 1); // @Leak
             t.string_value = value;
 
@@ -264,7 +278,7 @@ struct Lexer {
             return token(Token::DOTDOTDOT);
         }
 
-        Token t = token(*buffer);
+        Token t = token(static_cast<u32>(*buffer));
         buffer += 1;
         return t;
     }
@@ -390,15 +404,15 @@ namespace AST {
 
 struct Parser {
     std::vector<Token> tokens;
-    s32 token_cursor = 0;
+    u32 token_cursor = 0;
 
     void next_token() {
         if (token_cursor < (tokens.size()-1)) token_cursor += 1;
     }
 
-    Token peek_token(s32 offset = 0) {
-        s32 index = token_cursor + offset;
-        if (index >= (tokens.size()-1)) index = tokens.size()-1;
+    Token peek_token(u32 offset = 0) {
+        u32 index = token_cursor + offset;
+        if (index >= (tokens.size()-1)) index = trunc<u32>(tokens.size()-1);
         return tokens[index];
     }
 
@@ -489,6 +503,8 @@ struct Parser {
             next_token();
             return lit;
         }
+
+        return nullptr;
     }
 
     AST::Expression *parse_unary_expression() {
@@ -875,6 +891,11 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
             irfunc->insert(loop_exit);
             irm->set_block(loop_exit);
 
+            return nullptr;
+        }
+
+        default: {
+            assert(false && "Unhandled expression type in emit_expression.");
             return nullptr;
         }
     }
