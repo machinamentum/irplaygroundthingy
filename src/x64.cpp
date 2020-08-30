@@ -93,6 +93,10 @@ void _single_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 re
     dataptr->append_byte(opcode + LOW3(reg));
 }
 
+bool is_RSP_thru_RDI(u8 reg) {
+    return reg >= RSP && reg <= RDI;
+}
+
 s32 *_two_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, bool is_direct_register_use, u8 operand1, Address_Info operand2, u32 size, bool _0F_op = false) {
     u8 mod = MOD_INDIRECT_32BIT_DISP;
     if       (is_direct_register_use) mod = MOD_DIRECT;
@@ -121,7 +125,15 @@ s32 *_two_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, bool is_
         if (mod == MOD_INDIRECT_NO_DISP) assert(!(op2_reg >= RSP && op2_reg < R8));
     }
 
-    dataptr->append_byte(REX((size == 8) ? 1 : 0, BIT3(operand1), BIT3(index_reg), BIT3(op2_reg)));
+    // If we don't need to extend any of the register bits and we can operator in 32/16/8 bit modes,
+    // then we can omit the REX byte. 
+    bool need_rex = false;
+    if (size == 8 || ((BIT3(operand1) | BIT3(index_reg) | BIT3(op2_reg)) != 0)) need_rex = true;
+    // If we're using 8-bit mode, we have to use REX if we want to use registers RSP through RDI
+    // otherwise, the processor uses the 8-bit high registers of AH through DH.
+    else if (size == 1 && (is_RSP_thru_RDI(operand1) || is_RSP_thru_RDI(index_reg) || is_RSP_thru_RDI(op2_reg))) need_rex = true;
+    
+    if (need_rex) dataptr->append_byte(REX((size == 8) ? 1 : 0, BIT3(operand1), BIT3(index_reg), BIT3(op2_reg)));
 
     if (_0F_op) dataptr->append_byte(0x0F);
     dataptr->append_byte(opcode);
@@ -750,8 +762,8 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             info.index_reg   = target;
             info.scale       = (u8) size;
 
-            if (source.disp) lea_into_reg64(&code_section->data, reg->machine_reg, info);
-            else             add_reg64_to_reg64(&code_section->data, source.machine_reg, reg->machine_reg, gep->value_type->size);
+            if   (source.disp) lea_into_reg64(&code_section->data, reg->machine_reg, info);
+            else               add_reg64_to_reg64(&code_section->data, source.machine_reg, reg->machine_reg, gep->value_type->size);
 
             return 0;
         }
