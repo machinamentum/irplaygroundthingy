@@ -45,11 +45,24 @@ struct Type {
     u32 size;
     u32 alignment;
 
+    struct Function_Info {
+        Array<Type *> parameters;
+        Type *result_type;
+        bool is_varargs;
+    };
+
     union {
         Type *pointer_to;
 
-        Type *result_type;
+        Function_Info function;
     };
+
+    Type() {}
+
+    bool is_integer_type()  { return type == INTEGER; }
+    bool is_float_type()    { return type == FLOAT; }
+    bool is_pointer_type()  { return type == POINTER; }
+    bool is_function_type() { return type == FUNCTION; }
 };
 
 inline
@@ -59,12 +72,18 @@ Type *make_void_type() {
     return type;
 }
 
-// @TODO parameter types.
 inline
-Type *make_func_type(Type *result_type) {
+Type *make_func_type(Type *result_type, const Array_Slice<Type *> &parameters = Array_Slice<Type *>(), bool is_varargs = false) {
     Type *type = new Type();
     type->type = Type::FUNCTION;
-    type->result_type = result_type;
+    type->function.result_type = result_type;
+    type->size = 8; // @TargetInfo
+    type->alignment = type->size;
+
+    for (auto p : parameters) {
+        type->function.parameters.add(p);
+    }
+    type->function.is_varargs = is_varargs;
     return type;
 }
 
@@ -96,6 +115,32 @@ Type *make_pointer_type(Type *pointee) {
     return type;
 }
 
+inline
+bool types_match(Type *a, Type *b) {
+
+    if (a->type != b->type)           return false;
+    if (a->size != b->size)           return false;
+    if (a->alignment != b->alignment) return false;
+
+    if (a->type == Type::POINTER) {
+        return types_match(a->pointer_to, b->pointer_to);
+    }
+
+    if (a->type == Type::FUNCTION) {
+        if (a->function.parameters.count != b->function.parameters.count) return false;
+        if (!types_match(a->function.result_type, b->function.result_type)) return false;
+        if (a->function.is_varargs != b->function.is_varargs) return false;
+
+        for (u32 i = 0; i < a->function.parameters.count; ++i) {
+            if (!types_match(a->function.parameters[i], b->function.parameters[i])) return false;
+        }
+
+        return true;
+    }
+
+    return true;
+}
+
 struct Register {
     u8 machine_reg;
     bool is_free = true;
@@ -123,9 +168,11 @@ struct Constant : Value {
 
     u32 constant_type;
 
-    String string_value;
-    u64    integer_value;
-    double float_value;
+    union {
+        String string_value;
+        u64    integer_value;
+        double float_value;
+    };
 
     bool is_integer() { return constant_type == INTEGER; }
 };
@@ -286,7 +333,6 @@ struct Function : Global_Value {
 
     Array<Argument *> arguments;
     Array<Basic_Block *> blocks;
-    bool is_varargs = false;
 
     // For code gen
     Array<Register> register_usage;
@@ -348,7 +394,9 @@ Instruction_GEP *make_gep(Value *pointer_value, Value *index) {
 
 inline
 Instruction_Add *make_add(Value *lhs, Value *rhs) {
-    // @Incomplete assert that lhs and rhs types match
+    assert(types_match(lhs->value_type, rhs->value_type));
+    assert(lhs->value_type->is_integer_type());
+
     Instruction_Add *add = new Instruction_Add();
     add->value_type = lhs->value_type;
     add->lhs = lhs;
@@ -362,7 +410,9 @@ Instruction_Add *make_add(Value *lhs, Value *rhs) {
 
 inline
 Instruction_Sub *make_sub(Value *lhs, Value *rhs) {
-    // @Incomplete assert that lhs and rhs types match
+    assert(types_match(lhs->value_type, rhs->value_type));
+    assert(lhs->value_type->is_integer_type());
+
     Instruction_Sub *sub = new Instruction_Sub();
     sub->value_type = lhs->value_type;
     sub->lhs = lhs;
@@ -376,7 +426,9 @@ Instruction_Sub *make_sub(Value *lhs, Value *rhs) {
 
 inline
 Instruction_Mul *make_mul(Value *lhs, Value *rhs) {
-    // @Incomplete assert that lhs and rhs types match
+    assert(types_match(lhs->value_type, rhs->value_type));
+    assert(lhs->value_type->is_integer_type());
+
     Instruction_Mul *sub = new Instruction_Mul();
     sub->value_type = lhs->value_type;
     sub->lhs = lhs;
@@ -390,7 +442,9 @@ Instruction_Mul *make_mul(Value *lhs, Value *rhs) {
 
 inline
 Instruction_Div *make_div(Value *lhs, Value *rhs, bool signed_division) {
-    // @Incomplete assert that lhs and rhs types match
+    assert(types_match(lhs->value_type, rhs->value_type));
+    assert(lhs->value_type->is_integer_type());
+
     Instruction_Div *div = new Instruction_Div();
     div->value_type = lhs->value_type;
     div->lhs = lhs;
@@ -437,19 +491,29 @@ Instruction_Alloca *make_alloca(Type *alloca_type, u32 array_size = 1) {
     return _alloca;
 }
 
-
-// @TODO parameter types
 inline
-Instruction_Call *make_call(Function *func, const Array_Slice<Value *> &parameters = Array_Slice<Value *>()) {
-    assert(func->value_type && func->value_type->type == Type::FUNCTION);
+Instruction_Call *make_call(Value *target, const Array_Slice<Value *> &parameters = Array_Slice<Value *>()) {
+    assert(target->value_type && target->value_type->type == Type::FUNCTION);
     Instruction_Call *call = new Instruction_Call();
-    call->call_target = func;
-    call->value_type = func->value_type->result_type;
-    func->uses++;
+    call->call_target = target;
+    call->value_type = target->value_type->function.result_type;
+    target->uses++;
+
+    auto func_type = target->value_type;
+
+    if (func_type->function.is_varargs) assert(parameters.count >= func_type->function.parameters.count);
+    else                                assert(parameters.count == func_type->function.parameters.count);
 
     for (const auto v : parameters) {
         call->parameters.add(v);
         v->uses++;
+    }
+
+    for (u32 i = 0; i < func_type->function.parameters.count; ++i) {
+        auto vt = call->parameters[i]->value_type;
+        auto ft = func_type->function.parameters[i];
+
+        assert(types_match(vt, ft));
     }
     return call;
 }

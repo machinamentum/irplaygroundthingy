@@ -839,6 +839,9 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
         case INSTRUCTION_CALL: {
             auto call = static_cast<Instruction_Call *>(inst);
             auto function_target = static_cast<Function *>(call->call_target);
+            auto func_type = function_target->value_type;
+
+            assert(func_type->type == Type::FUNCTION);
 
             if (function_target->intrinsic_id) {
                 switch (function_target->intrinsic_id) {
@@ -910,7 +913,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                         move_reg64_to_reg64(&code_section->data, result, param_reg);
                 }
 
-                if (is_float && object->target.is_win32() && function_target->is_varargs && i >= function_target->arguments.count) {
+                if (is_float && object->target.is_win32() && func_type->function.is_varargs && i >= func_type->function.parameters.count) {
                     // move float value into corresponding integer register slot
                     movq_xmm_to_reg(&code_section->data, param_reg, int_param_reg, 8);
                 }

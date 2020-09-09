@@ -15,7 +15,8 @@ set (IR_SRCS
     src/macho.cpp
     src/coff.cpp
     src/x64.cpp
-    src/linker_object.cpp 
+    src/linker_object.cpp
+    src/print_ir.cpp
 )
 
 

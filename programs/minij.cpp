@@ -47,6 +47,7 @@ library at this point.
 #include <stdint.h>
 
 #include "ir.h"
+#include "print_ir.h"
 
 typedef uint64_t u64;
 typedef uint32_t u32;
@@ -398,8 +399,6 @@ namespace AST {
 
         Scope *body;
     };
-
-
 };
 
 struct Parser {
@@ -734,15 +733,15 @@ struct IR_Man : IR_Manager {
 
 void emit_scope(AST::Scope *scope, AST::Function *function, Compilation_Unit *unit, Function *irfunc, IR_Man *irm);
 
-Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilation_Unit *unit, Function *irfunc, IR_Man *irm) {
+Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilation_Unit *unit, Function *irfunc, IR_Man *irm, Type *type_for_literal = nullptr) {
     switch (expr->type) {
         case AST::LITERAL: {
             auto lit = static_cast<AST::Literal *>(expr);
 
             switch (lit->literal_type) {
-                case AST::Literal::STRING : return make_string_constant(lit->string_value);
-                case AST::Literal::INTEGER: return make_integer_constant(lit->integer_value);
-                case AST::Literal::FLOAT  : return make_float_constant(lit->float_value, lit->expr_type);
+                case AST::Literal::STRING : return make_string_constant (lit->string_value);
+                case AST::Literal::INTEGER: return make_integer_constant(lit->integer_value, type_for_literal ? type_for_literal : make_integer_type(8));
+                case AST::Literal::FLOAT  : return make_float_constant  (lit->float_value,   type_for_literal ? type_for_literal : lit->expr_type);
             }
             assert(false);
             return nullptr;
@@ -751,8 +750,21 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
         case AST::BINARY_EXPRESSION: {
             auto bin = static_cast<AST::Binary_Expression *>(expr);
 
-            auto left  = emit_expression(bin->lhs, function, unit, irfunc, irm);
-            auto right = emit_expression(bin->rhs, function, unit, irfunc, irm);
+            Value *left  = nullptr;
+            Value *right = nullptr;
+
+            if (bin->operator_type == '=') {
+                left  = emit_expression(bin->lhs, function, unit, irfunc, irm);
+                right = emit_expression(bin->rhs, function, unit, irfunc, irm, left->value_type->pointer_to);
+            } else {
+                if (bin->lhs->type == AST::LITERAL) {
+                    right = emit_expression(bin->rhs, function, unit, irfunc, irm);
+                    left  = emit_expression(bin->lhs, function, unit, irfunc, irm, right->value_type);
+                } else {
+                    left  = emit_expression(bin->lhs, function, unit, irfunc, irm);
+                    right = emit_expression(bin->rhs, function, unit, irfunc, irm, left->value_type);
+                }
+            }
 
             if (bin->operator_type == '=') {
                 return irm->insert_store(right, left);
@@ -788,12 +800,6 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
         case AST::FUNCTION_CALL: {
             auto call = static_cast<AST::Function_Call *>(expr);
 
-            Array<Value *> args;
-
-            for (auto a : call->arguments) {
-                args.add(emit_expression(a, function, unit, irfunc, irm));
-            }
-
             Function *target = nullptr;
 
             if (false) {
@@ -808,6 +814,28 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
             }
 
             assert(target);
+            auto func_type = target->value_type;
+
+            Array<Value *> args;
+
+            for (u32 i = 0; i < call->arguments.size(); ++i) {
+                auto a = call->arguments[i];
+
+                Type *param_type = nullptr;
+                if (i < func_type->function.parameters.count) param_type = func_type->function.parameters[i];
+
+                args.add(emit_expression(a, function, unit, irfunc, irm, param_type));
+            }
+
+            
+
+            // for (auto a: args) {
+            //     print(a->value_type);
+            //     printf("\n");
+            // }
+
+            // print(target->value_type);
+            // printf("\n");
 
             return irm->insert_call(target, args);
         }
@@ -907,6 +935,13 @@ void emit_scope(AST::Scope *scope, AST::Function *function, Compilation_Unit *un
     }
 }
 
+Array_Slice<Type *> to_slice(std::vector<Type *> &v) {
+    Array_Slice<Type *> types;
+    types.data = v.data();
+    types.count = v.size();
+    return types;
+}
+
 int main(int argc, char **argv) {
     char *filename = nullptr;
     bool do_jit = false;
@@ -974,15 +1009,17 @@ int main(int argc, char **argv) {
 
         Function *func = new Function();
         func->name = function->name;
-        func->value_type = make_func_type(function->return_type);
-        func->is_varargs = function->is_varargs;
-        unit.functions.add(func);
 
+        std::vector<Type *> arg_types;
         for (auto var : function->arguments) {
             Argument *arg = make_arg(var->expr_type);
             var->storage = arg;
             func->arguments.add(arg);
+            arg_types.push_back(var->expr_type);
         }
+
+        func->value_type = make_func_type(function->return_type, to_slice(arg_types), function->is_varargs);
+        unit.functions.add(func);
 
         if (function->body) {
             Basic_Block *block = new Basic_Block();
