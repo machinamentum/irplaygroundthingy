@@ -98,6 +98,13 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
 
 void emit_obj_file(Compilation_Unit *unit);
 
-void do_jit_and_run_program_main(Compilation_Unit *unit);
+
+typedef void *DLL_Handle;
+DLL_Handle dll_open(const char *path);
+void *dll_find_symbol(DLL_Handle handle, const char *name);
+
+typedef void *(JIT_Lookup_Symbol_Callback)(Compilation_Unit *unit, const char *symbol_name);
+
+void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callback cb = nullptr);
 
 #endif

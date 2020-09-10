@@ -111,38 +111,31 @@ void emit_obj_file(Compilation_Unit *unit) {
 #include <sys/mman.h>
 #include <dlfcn.h>
 
-static
-void *dl_open(char *path) {
+DLL_Handle dll_open(const char *path) {
     return dlopen(path, RTLD_LAZY);
 }
 
-static
-void *dl_sym(void *handle, char *name) {
+void *dll_find_symbol(DLL_Handle handle, const char *name) {
     return dlsym(handle, name);
 }
-
-typedef void *dl_handle;
 
 #else
 #include <Windows.h>
 #include <Memoryapi.h>
 
-static
-HMODULE dl_open(char *path) {
+DLL_Handle dll_open(const char *path) {
     if (path == nullptr) return GetModuleHandle(NULL);
 
     return LoadLibraryA(path);
 }
 
-static
-void *dl_sym(HMODULE handle, char *name) {
+void *dll_find_symbol(DLL_Handle handle, const char *name) {
     return GetProcAddress(handle, name);
 }
 
-typedef HMODULE dl_handle;
 #endif
 
-void do_jit_and_run_program_main(Compilation_Unit *unit) {
+void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callback lookup_sym) {
     assert(sizeof(void *) == 8); // 32-bit mode unsupported right now @TODO
 
     // @Cutnpaste from emit_obj_file
@@ -158,9 +151,9 @@ void do_jit_and_run_program_main(Compilation_Unit *unit) {
     auto code_section = &object.sections[text_sec_index];
     auto data_section = &object.sections[data_sec_index];
 
-    Array<dl_handle> dlls_to_search;
+    Array<DLL_Handle> dlls_to_search;
 
-    dlls_to_search.add(dl_open(nullptr));
+    dlls_to_search.add(dll_open(nullptr));
 
 #ifndef _WIN32
     char *text_memory = (char *)mmap(nullptr, code_section->data.size(), PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT, -1, 0);
@@ -170,7 +163,7 @@ void do_jit_and_run_program_main(Compilation_Unit *unit) {
         DWORD old_prot;
         VirtualProtect(text_memory, code_section->data.size(), PAGE_EXECUTE_READWRITE, &old_prot);
 
-        dlls_to_search.add(dl_open("msvcrt.dll"));
+        dlls_to_search.add(dll_open("msvcrt.dll"));
     }
 #endif
     char *data_memory = (char *)malloc(data_section->data.size());
@@ -191,6 +184,8 @@ void do_jit_and_run_program_main(Compilation_Unit *unit) {
     section_memory.add(data_memory);
     section_memory.add(text_memory);
 
+    bool error = false;
+
     for (auto reloc : code_section->relocations) {
         bool rip = reloc.is_for_rip_call || reloc.is_rip_relative;
 
@@ -208,11 +203,22 @@ void do_jit_and_run_program_main(Compilation_Unit *unit) {
         if (symbol->is_externally_defined) {
             char *symbol_target = nullptr;
 
-            for (auto handle : dlls_to_search) {
-                symbol_target = (char *)dl_sym(handle, symbol->linkage_name.data);
-                if (symbol_target) break;
+            if (lookup_sym) {
+                symbol_target = (char *)lookup_sym(unit, symbol->linkage_name.data);
             }
-            assert(symbol_target);
+
+            if (!symbol_target) {
+                for (auto handle : dlls_to_search) {
+                    symbol_target = (char *)dll_find_symbol(handle, symbol->linkage_name.data);
+                    if (symbol_target) break;
+                }
+            }
+
+            if (!symbol_target) {
+                printf("Could not find externally-defined symbol '%s'\n", symbol->linkage_name.data);
+                error = true;
+                continue;
+            }
 
             if   (rip) *(u32 *)target = (u32)(symbol_target - target);
             else       *(u64 *)target = (u64) symbol_target;
@@ -233,6 +239,8 @@ void do_jit_and_run_program_main(Compilation_Unit *unit) {
     }
 
     assert(main_symbol);
+
+    if (error) return;
 
     void (*prog_main)() = (void (*)())(text_memory + main_symbol->section_offset);
     prog_main();

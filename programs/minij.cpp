@@ -111,6 +111,7 @@ struct Token {
         KEYWORD_I8,
         KEYWORD_RETURN,
         KEYWORD_WHILE,
+        KEYWORD_LIBRARY,
 
         KEYWORD_END,
 
@@ -148,6 +149,7 @@ const char *keywords[] = {
     "i8",
     "return",
     "while",
+    "library",
 };
 
 bool starts_identifier(char c) {
@@ -398,6 +400,10 @@ namespace AST {
         bool is_varargs = false;
 
         Scope *body;
+    };
+
+    struct Library {
+        char *name;
     };
 };
 
@@ -725,6 +731,18 @@ struct Parser {
 
         return function;
     }
+
+    AST::Library *parse_library() {
+        if (!expect_and_eat(Token::KEYWORD_LIBRARY)) return nullptr;
+        if (!expect(Token::STRING)) return nullptr;
+
+        AST::Library *lib = new AST::Library();
+        lib->name = peek_token().string_value;
+        next_token();
+
+        if (!expect_and_eat(';')) return nullptr;
+        return lib;
+    }
 };
 
 struct IR_Man : IR_Manager {
@@ -740,7 +758,12 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
 
             switch (lit->literal_type) {
                 case AST::Literal::STRING : return make_string_constant (lit->string_value);
-                case AST::Literal::INTEGER: return make_integer_constant(lit->integer_value, type_for_literal ? type_for_literal : make_integer_type(8));
+                case AST::Literal::INTEGER: {
+                    if (type_for_literal && type_for_literal->type == Type::POINTER) {
+                        return make_pointer_constant(lit->integer_value, type_for_literal);
+                    }
+                    return make_integer_constant(lit->integer_value, type_for_literal ? type_for_literal : make_integer_type(8));
+                }
                 case AST::Literal::FLOAT  : return make_float_constant  (lit->float_value,   type_for_literal ? type_for_literal : lit->expr_type);
             }
             assert(false);
@@ -942,6 +965,29 @@ Array_Slice<Type *> to_slice(std::vector<Type *> &v) {
     return types;
 }
 
+std::vector<DLL_Handle> loaded_dlls;
+
+void *symbol_lookup(Compilation_Unit *unit, const char *symbol_name) {
+    for (auto dll: loaded_dlls) {
+        assert(dll);
+        void *result = dll_find_symbol(dll, symbol_name);
+        if (result) return result;
+    }
+
+    return nullptr;
+}
+
+#ifdef WIN32
+#define LIB_PREFIX
+#define LIB_EXT     "dll"
+#elif defined(__APPLE__)
+#define LIB_PREFIX "lib"
+#define LIB_EXT     "dylib"
+#else
+#define LIB_PREFIX "lib"
+#define LIB_EXT     "so"
+#endif
+
 int main(int argc, char **argv) {
     char *filename = nullptr;
     bool do_jit = false;
@@ -989,9 +1035,15 @@ int main(int argc, char **argv) {
     */
 
     std::vector<AST::Function *> functions;
-    while (parser.peek_token().type == Token::KEYWORD_FUNC) {
-        AST::Function *function = parser.parse_function();
-        functions.push_back(function);
+    std::vector<AST::Library  *> libs;
+    while (parser.peek_token().type == Token::KEYWORD_FUNC || parser.peek_token().type == Token::KEYWORD_LIBRARY) {
+        if (parser.peek_token().type == Token::KEYWORD_FUNC) {
+            AST::Function *function = parser.parse_function();
+            functions.push_back(function);
+        } else if (parser.peek_token().type == Token::KEYWORD_LIBRARY) {
+            AST::Library *lib = parser.parse_library();
+            libs.push_back(lib);
+        }
     }
 
     Compilation_Unit unit;
@@ -1035,8 +1087,24 @@ int main(int argc, char **argv) {
         }
     }
 
-    if   (do_jit) do_jit_and_run_program_main(&unit);
-    else          emit_obj_file(&unit);
+    if (do_jit) {
+        for (auto lib : libs) {
+            char buffer[512];
+            snprintf(buffer, 512, LIB_PREFIX "%s." LIB_EXT, lib->name);
+
+            auto handle = dll_open(buffer);
+            if (!handle) {
+                printf("Could not load library '%s'\n", buffer);
+                continue;
+            }
+
+            loaded_dlls.push_back(handle);
+        }
+
+        do_jit_and_run_program_main(&unit, symbol_lookup);
+    }
+    else
+        emit_obj_file(&unit);
     
     return 0;
 }

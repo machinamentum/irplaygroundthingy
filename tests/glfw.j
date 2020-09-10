@@ -1,4 +1,6 @@
 
+library "glfw";
+
 func glfwInit();
 func glfwCreateWindow(w: i32, h: i32, title: *i8, unk: *i8, unk1: *i8) -> *i8;
 func glfwTerminate();

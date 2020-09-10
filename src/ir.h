@@ -163,7 +163,8 @@ struct Constant : Value {
     enum {
         STRING,
         INTEGER,
-        FLOAT
+        FLOAT,
+        POINTER, // uses integer_value
     };
 
     u32 constant_type;
@@ -205,6 +206,17 @@ Constant *make_float_constant(double value, Type *value_type = make_float_type(8
     con->value_type = value_type;
 
     assert(value_type->type == Type::FLOAT);
+    return con;
+}
+
+inline
+Constant *make_pointer_constant(u64 value, Type *value_type) {
+    Constant *con = new Constant();
+    con->constant_type = Constant::INTEGER;
+    con->integer_value = value;
+    con->value_type = value_type;
+
+    assert(value_type->type == Type::POINTER);
     return con;
 }
 
