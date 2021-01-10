@@ -126,8 +126,15 @@ void emit_macho_file(Linker_Object *object) {
 
     mach_header_64 *header = buffer.allocate_unaligned<mach_header_64>();
     header->magic = MH_MAGIC_64;
-    header->cputype = CPU_TYPE_x86_64;
-    header->cpusubtype = 3;
+
+    if (object->target.is_x64()) {
+        header->cputype = CPU_TYPE_x86_64;
+        header->cpusubtype = 3;
+    } else if (object->target.is_aarch64()) {
+        header->cputype = CPU_TYPE_AArch64;
+        header->cpusubtype = 0;
+    }
+
     header->filetype = MH_OBJECT;
     header->ncmds = 2;
     // header->sizeofcmds =;

@@ -11,6 +11,7 @@ struct Basic_Block;
 
 enum {
     VALUE_CONSTANT,
+    VALUE_GLOBAL,
     VALUE_BASIC_BLOCK,
     VALUE_ARGUMENT,
 
@@ -76,6 +77,8 @@ inline
 Type *make_func_type(Type *result_type, const Array_Slice<Type *> &parameters = Array_Slice<Type *>(), bool is_varargs = false) {
     Type *type = new Type();
     type->type = Type::FUNCTION;
+    new (&type->function) Type::Function_Info;
+
     type->function.result_type = result_type;
     type->size = 8; // @TargetInfo
     type->alignment = type->size;
@@ -89,6 +92,7 @@ Type *make_func_type(Type *result_type, const Array_Slice<Type *> &parameters = 
 
 inline
 Type *make_integer_type(u32 size) {
+    assert(size >= 1 && size <= 8);
     Type *type      = new Type();
     type->type      = Type::INTEGER;
     type->size      = size;
@@ -328,6 +332,8 @@ struct Basic_Block : Value {
 };
 
 struct Global_Value : Constant {
+    Global_Value() { type = VALUE_GLOBAL; }
+
     String name;
     u32 symbol_index = 0;
 };

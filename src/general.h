@@ -182,6 +182,10 @@ struct Data_Buffer {
         c->count += size;
     }
 
+    void append_string(String s) {
+        append(s.data, (u32)s.length);
+    }
+
     void *allocate_bytes_unaligned(u32 size) {
         Chunk *c = &chunks[chunks.count-1];
         if (c->count+size >= c->reserved) c = new_chunk(size);

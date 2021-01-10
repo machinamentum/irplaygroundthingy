@@ -1093,7 +1093,7 @@ Register make_reg(u8 machine_reg, bool is_free = true) {
     return reg;
 }
 
-void emit_function(Linker_Object *object, Section *code_section, Section *data_section, Function *function) {
+void x64_emit_function(Linker_Object *object, Section *code_section, Section *data_section, Function *function) {
     if (function->intrinsic_id) return;
     if (function->uses == 0 && (function->blocks.count == 0)) {
         // Function isn't used and is externally defined so we don't need

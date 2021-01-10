@@ -16,7 +16,8 @@ u32 get_symbol_index(Linker_Object *object, Global_Value *value) {
     return value->symbol_index;
 }
 
-void emit_function(Linker_Object *object, Section *code_section, Section *data_section, Function *function);
+void x64_emit_function(Linker_Object *object, Section *code_section, Section *data_section, Function *function);
+// void AArch64_emit_function(Linker_Object *object, Section *code_section, Section *data_section, Function *function);
 
 void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *text_index, u32 *data_index) {
     u32 data_sec_index = 0;
@@ -79,7 +80,10 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
     }
 
     for (auto func : unit->functions) {
-        emit_function(object, &object->sections[text_sec_index], &object->sections[data_sec_index], func);
+        if (object->target.is_x64())
+            x64_emit_function(object, &object->sections[text_sec_index], &object->sections[data_sec_index], func);
+        // else if (object->target.is_aarch64())
+        //     AArch64_emit_function(object, &object->sections[text_sec_index], &object->sections[data_sec_index], func);
     }
 
     assert(object->symbol_table.count <= U32_MAX);
