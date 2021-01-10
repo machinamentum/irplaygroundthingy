@@ -1,6 +1,8 @@
 #include "print_ir.h"
 #include "ir.h"
 
+namespace josh {
+
 void print(Type *type) {
     switch (type->type) {
         case Type::VOID   : printf("void"); return;
@@ -30,3 +32,5 @@ void print(Type *type) {
             break;
     }
 }
+
+} // namespace josh

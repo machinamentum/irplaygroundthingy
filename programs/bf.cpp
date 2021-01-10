@@ -4,6 +4,8 @@
 #include "linker_object.h"
 #include "ir.h"
 
+using namespace josh;
+
 #include <stdio.h>
 
 char *bf_program = nullptr;

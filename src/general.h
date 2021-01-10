@@ -10,6 +10,10 @@
 #include <new>
 #include <initializer_list>
 
+#include <stdio.h>
+
+namespace josh {
+
 typedef uint64_t u64;
 typedef uint32_t u32;
 typedef uint16_t u16;
@@ -79,8 +83,6 @@ struct Array {
         return nullptr;
     }
 };
-
-#include <stdio.h>
 
 template <typename T>
 struct Array_Slice {
@@ -232,5 +234,7 @@ struct Data_Buffer {
         return size;
     }
 };
+
+} // namespace josh
 
 #endif

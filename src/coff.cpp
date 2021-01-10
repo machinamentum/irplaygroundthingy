@@ -1,6 +1,8 @@
 #include "general.h"
 #include "linker_object.h"
 
+using namespace josh;
+
 #include <stdio.h> // fopen and whatnot
 
 struct PE_Coff_Header {
@@ -75,6 +77,8 @@ const u16 IMAGE_REL_AMD64_SECREL     = 0x000B;
 
 
 const u8 IMAGE_SYM_DTYPE_FUNCTION = 0x20;
+
+namespace josh {
 
 void emit_coff_file(Linker_Object *object) {
     Data_Buffer buffer;
@@ -201,4 +205,6 @@ void emit_coff_file(Linker_Object *object) {
         } while (amount > 0);
     }
     fclose(file);
+}
+
 }

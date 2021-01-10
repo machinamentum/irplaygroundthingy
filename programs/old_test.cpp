@@ -2,6 +2,8 @@
 #include "linker_object.h"
 #include "ir.h"
 
+using namespace josh;
+
 void old_test();
 
 int main(int argc, char **argv) {

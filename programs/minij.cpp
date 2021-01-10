@@ -49,6 +49,8 @@ library at this point.
 #include "ir.h"
 #include "print_ir.h"
 
+using namespace josh;
+
 typedef uint64_t u64;
 typedef uint32_t u32;
 typedef uint16_t u16;

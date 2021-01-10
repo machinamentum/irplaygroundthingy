@@ -2,6 +2,8 @@
 #include "linker_object.h"
 #include "ir.h"
 
+using namespace josh;
+
 #include <stdio.h>
 
 const u8 RAX = 0;
@@ -1093,6 +1095,8 @@ Register make_reg(u8 machine_reg, bool is_free = true) {
     return reg;
 }
 
+namespace josh {
+
 void x64_emit_function(Linker_Object *object, Section *code_section, Section *data_section, Function *function) {
     if (function->intrinsic_id) return;
     if (function->uses == 0 && (function->blocks.count == 0)) {
@@ -1233,4 +1237,6 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
     for (auto fixup : function->stack_size_fixups) {
         *fixup = function->stack_size;
     }
+}
+
 }

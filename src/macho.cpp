@@ -1,6 +1,8 @@
 #include "general.h"
 #include "linker_object.h"
 
+using namespace josh;
+
 #include <stdio.h> // fopen and such
 
 struct mach_header_64 {
@@ -120,6 +122,8 @@ const u8 N_SECT = 0x0E;
 const u8 NO_SECT = 0;
 
 const u32 S_ATTR_PURE_INSTRUCTIONS = 0x80000000;
+
+namespace josh {
 
 void emit_macho_file(Linker_Object *object) {
     Data_Buffer buffer;
@@ -277,4 +281,6 @@ void emit_macho_file(Linker_Object *object) {
         } while (amount > 0);
     }
     fclose(file);
+}
+
 }

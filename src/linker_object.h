@@ -4,6 +4,8 @@
 
 #include "general.h"
 
+namespace josh {
+
 struct Global_Value;
 struct Compilation_Unit;
 
@@ -111,5 +113,7 @@ void *dll_find_symbol(DLL_Handle handle, const char *name);
 typedef void *(JIT_Lookup_Symbol_Callback)(Compilation_Unit *unit, const char *symbol_name);
 
 void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callback cb = nullptr);
+
+} // namespace josh
 
 #endif

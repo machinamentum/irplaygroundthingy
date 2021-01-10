@@ -1,7 +1,39 @@
 #include "linker_object.h"
 #include "ir.h"
 
+using namespace josh;
+
 #include <stdio.h>
+
+#ifndef _WIN32
+#include <sys/mman.h>
+#include <dlfcn.h>
+
+DLL_Handle josh::dll_open(const char *path) {
+    return dlopen(path, RTLD_LAZY);
+}
+
+void *josh::dll_find_symbol(DLL_Handle handle, const char *name) {
+    return dlsym(handle, name);
+}
+
+#else
+#include <Windows.h>
+#include <Memoryapi.h>
+
+DLL_Handle josh::dll_open(const char *path) {
+    if (path == nullptr) return GetModuleHandle(NULL);
+
+    return LoadLibraryA(path);
+}
+
+void *dll_find_symbol(DLL_Handle handle, const char *name) {
+    return GetProcAddress(handle, name);
+}
+
+#endif
+
+namespace josh {
 
 u32 get_symbol_index(Linker_Object *object, Global_Value *value) {
     if (value->symbol_index == 0) {
@@ -110,34 +142,6 @@ void emit_obj_file(Compilation_Unit *unit) {
         emit_macho_file(&object);
     }
 }
-
-#ifndef _WIN32
-#include <sys/mman.h>
-#include <dlfcn.h>
-
-DLL_Handle dll_open(const char *path) {
-    return dlopen(path, RTLD_LAZY);
-}
-
-void *dll_find_symbol(DLL_Handle handle, const char *name) {
-    return dlsym(handle, name);
-}
-
-#else
-#include <Windows.h>
-#include <Memoryapi.h>
-
-DLL_Handle dll_open(const char *path) {
-    if (path == nullptr) return GetModuleHandle(NULL);
-
-    return LoadLibraryA(path);
-}
-
-void *dll_find_symbol(DLL_Handle handle, const char *name) {
-    return GetProcAddress(handle, name);
-}
-
-#endif
 
 void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callback lookup_sym) {
     assert(sizeof(void *) == 8); // 32-bit mode unsupported right now @TODO
@@ -249,3 +253,5 @@ void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callb
     void (*prog_main)() = (void (*)())(text_memory + main_symbol->section_offset);
     prog_main();
 }
+
+} // namespace josh

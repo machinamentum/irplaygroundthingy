@@ -4,6 +4,9 @@
 
 #include "linker_object.h"
 
+
+namespace josh {
+
 struct Value;
 struct Function;
 struct Instruction;
@@ -646,5 +649,6 @@ struct IR_Manager {
     }
 };
 
+} // namespace josh
 
 #endif
