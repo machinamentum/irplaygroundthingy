@@ -2,12 +2,14 @@ cmake_minimum_required(VERSION 2.6)
 project(ir)
 #find_package (Threads)
 
+set(CMAKE_CXX_STANDARD 17)
+
 option(ENABLE_PROGRAMS "Include build targets for programs from the /programs directory." ON)
 
 include_directories(src)
 
 if (UNIX)
-    add_definitions(--std=c++11 -fno-rtti -fno-exceptions -Wall -Wextra -pedantic -Wconversion -Wno-c++14-binary-literal -Wno-unused-const-variable)
+    add_definitions(-fno-rtti -fno-exceptions -Wall -Wextra -pedantic -Wconversion -Wno-unused-const-variable)
 endif()
 
 
