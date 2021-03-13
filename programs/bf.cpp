@@ -22,6 +22,7 @@ void gen_bf_instruction(Function *function, BF_Gen *bfg) {
     Instruction *load = bfg->insert_load(bfg->index_alloca);
     auto gep = bfg->insert_gep(bfg->data_buffer_alloca, load);
 
+    Constant *constant_one_index = make_integer_constant(1, load->value_type);
     Constant *constant_one = make_integer_constant(1, bfg->data_buffer_alloca->value_type->pointer_to);
 
     while (*bfg->bf_program) {
@@ -44,7 +45,7 @@ void gen_bf_instruction(Function *function, BF_Gen *bfg) {
             }
 
             case '>': {
-                auto add = bfg->insert_add(load, constant_one);
+                auto add = bfg->insert_add(load, constant_one_index);
                 load = add;
 
                 gep = bfg->insert_gep(bfg->data_buffer_alloca, add);
@@ -52,7 +53,7 @@ void gen_bf_instruction(Function *function, BF_Gen *bfg) {
             }
 
             case '<': {
-                auto sub = bfg->insert_sub(load, constant_one);
+                auto sub = bfg->insert_sub(load, constant_one_index);
                 load = sub;
 
                 gep = bfg->insert_gep(bfg->data_buffer_alloca, sub);
@@ -176,7 +177,7 @@ int main(int argc, char **argv) {
 
     Function *putchar_func = new Function();
     putchar_func->name = "putchar";
-    putchar_func->value_type = make_func_type(make_void_type());
+    putchar_func->value_type = make_func_type(make_void_type(), {make_integer_type(cell_size)});
 
     Function *getchar_func = new Function();
     getchar_func->name = "getchar";
@@ -184,7 +185,7 @@ int main(int argc, char **argv) {
 
     Function *memset_func = new Function();
     memset_func->name  = "memset";
-    memset_func->value_type = make_func_type(make_void_type());
+    memset_func->value_type = make_func_type(make_void_type(), {make_pointer_type(make_integer_type(cell_size)), make_integer_type(8), make_integer_type(8)});
 
     Function *main_func = new Function();
     main_func->name = "main";
