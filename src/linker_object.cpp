@@ -5,6 +5,11 @@ using namespace josh;
 
 #include <stdio.h>
 
+#ifdef __APPLE__
+#include <libkern/OSCacheControl.h>
+#include <pthread.h>
+#endif
+
 #ifndef _WIN32
 #include <sys/mman.h>
 #include <dlfcn.h>
@@ -165,6 +170,10 @@ void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callb
 
 #ifndef _WIN32
     char *text_memory = (char *)mmap(nullptr, code_section->data.size(), PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT, -1, 0);
+
+#ifdef __APPLE__
+    pthread_jit_write_protect_np(false);
+#endif
 #else
     char *text_memory = (char *)VirtualAlloc(nullptr, code_section->data.size(), MEM_COMMIT, PAGE_READWRITE);
     {
@@ -247,6 +256,11 @@ void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callb
     }
 
     assert(main_symbol);
+
+#ifdef __APPLE__
+    pthread_jit_write_protect_np(true);
+    sys_icache_invalidate(text_memory, code_section->data.size());
+#endif
 
     if (error) return;
 
