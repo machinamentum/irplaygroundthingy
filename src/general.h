@@ -9,10 +9,13 @@
 
 #include <new>
 #include <initializer_list>
+#include <string_view>
 
 #include <stdio.h>
 
 namespace josh {
+
+using String = std::string_view;
 
 typedef uint64_t u64;
 typedef uint32_t u32;
@@ -134,17 +137,6 @@ struct Array_Slice {
     }
 };
 
-
-struct String {
-    char  *data;
-    size_t length;
-
-    String(const char *s = nullptr) {
-        data = const_cast<char *>(s);
-        length = data ? strlen(data) : 0;
-    }
-};
-
 template <typename T>
 T ensure_aligned(T value, T alignment) {
     T align_bits = alignment - 1;
@@ -155,8 +147,8 @@ T ensure_aligned(T value, T alignment) {
 struct Data_Buffer {
     struct Chunk {
         u8 *data      = nullptr;
-        u32 count     = 0;
-        u32 reserved  = 0;
+        size_t count     = 0;
+        size_t reserved  = 0;
     };
 
     Array<Chunk> chunks;
@@ -165,7 +157,7 @@ struct Data_Buffer {
         new_chunk();
     }
 
-    Chunk *new_chunk(u32 size = 4096) {
+    Chunk *new_chunk(size_t size = 4096) {
         if (size < 4096) size = 4096;
         Chunk c;
         c.data     = (u8 *)malloc(size);
@@ -176,7 +168,7 @@ struct Data_Buffer {
         return &chunks[chunks.count-1];
     }
 
-    void append(void *src, u32 size) {
+    void append(const void *src, size_t size) {
         Chunk *c = &chunks[chunks.count-1];
         if (c->count+size >= c->reserved) c = new_chunk(size);
 
@@ -184,11 +176,11 @@ struct Data_Buffer {
         c->count += size;
     }
 
-    void append_string(String s) {
-        append(s.data, (u32)s.length);
+    void append_string(const String& s) {
+        append(s.data(), (u32)s.length());
     }
 
-    void *allocate_bytes_unaligned(u32 size) {
+    void *allocate_bytes_unaligned(size_t size) {
         Chunk *c = &chunks[chunks.count-1];
         if (c->count+size >= c->reserved) c = new_chunk(size);
 
@@ -204,7 +196,7 @@ struct Data_Buffer {
 
     template<typename T>
     T *allocate() {
-        u32 align = alignof(T);
+        size_t align = alignof(T);
 
         Chunk *c = &chunks[chunks.count-1];
         auto count = ensure_aligned(c->count, align);

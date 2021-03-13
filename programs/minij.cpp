@@ -831,7 +831,7 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
                 target = irm->debugbreak;
             } else {
                 for (auto func : unit->functions) {
-                    if (strcmp(call->call_target_name, func->name.data) == 0) {
+                    if (strcmp(call->call_target_name, func->name.data()) == 0) {
                         target = func;
                         break;
                     }

@@ -498,10 +498,10 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
             u32 data_sec_offset = data_section->data.size();
 
             // copy the string characters into the data section
-            assert(constant->string_value.length <= U32_MAX);
-            u32 length = static_cast<u32>(constant->string_value.length);
+            assert(constant->string_value.length() <= U32_MAX);
+            size_t length = static_cast<u32>(constant->string_value.length());
             void *data_target = data_section->data.allocate_bytes_unaligned(length);
-            memcpy(data_target, constant->string_value.data, length);
+            memcpy(data_target, constant->string_value.data(), length);
             data_section->data.append_byte(0);
 
 

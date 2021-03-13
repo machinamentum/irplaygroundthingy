@@ -100,7 +100,7 @@ void emit_coff_file(Linker_Object *object) {
 
         sect.mach_section = section;
 
-        memcpy(section->Name, sect.name.data, sect.name.length);
+        memcpy(section->Name, sect.name.data(), sect.name.length());
 
         u32 data_size = sect.data.size();
         section->VirtualSize    = data_size;
@@ -165,15 +165,15 @@ void emit_coff_file(Linker_Object *object) {
     for (auto &symbol : object->symbol_table) {
         PE_Coff_Symbol *sym = (PE_Coff_Symbol *)buffer.allocate_bytes_unaligned(PE_COFF_SYMBOL_SIZE);
 
-        if (symbol.linkage_name.length <= 8) {
+        if (symbol.linkage_name.length() <= 8) {
             memset(sym->Name.ShortName, 0, 8);
-            memcpy(sym->Name.ShortName, symbol.linkage_name.data, symbol.linkage_name.length);
+            memcpy(sym->Name.ShortName, symbol.linkage_name.data(), symbol.linkage_name.length());
         } else {
             sym->Name.LongName.Zeroes = 0;
             sym->Name.LongName.Offset = string_buffer.size() + 4; // +4 to include the string_table_size field itself.
 
-            assert(symbol.linkage_name.length <= U32_MAX);
-            string_buffer.append(symbol.linkage_name.data, static_cast<u32>(symbol.linkage_name.length));
+            assert(symbol.linkage_name.length() <= U32_MAX);
+            string_buffer.append(symbol.linkage_name.data(), static_cast<u32>(symbol.linkage_name.length()));
             string_buffer.append_byte(0);
         }
 

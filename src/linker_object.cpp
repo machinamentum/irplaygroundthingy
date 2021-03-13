@@ -221,18 +221,18 @@ void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callb
             char *symbol_target = nullptr;
 
             if (lookup_sym) {
-                symbol_target = (char *)lookup_sym(unit, symbol->linkage_name.data);
+                symbol_target = (char *)lookup_sym(unit, symbol->linkage_name.data());
             }
 
             if (!symbol_target) {
                 for (auto handle : dlls_to_search) {
-                    symbol_target = (char *)dll_find_symbol(handle, symbol->linkage_name.data);
+                    symbol_target = (char *)dll_find_symbol(handle, symbol->linkage_name.data());
                     if (symbol_target) break;
                 }
             }
 
             if (!symbol_target) {
-                printf("Could not find externally-defined symbol '%s'\n", symbol->linkage_name.data);
+                printf("Could not find externally-defined symbol '%s'\n", symbol->linkage_name.data());
                 error = true;
                 continue;
             }
@@ -249,8 +249,9 @@ void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callb
     }
 
     Symbol *main_symbol = nullptr;
+    // FIXME horribly inefficient
     for (auto &sym : object.symbol_table) {
-        if (strcmp(sym.linkage_name.data, "main") == 0) {
+        if (strcmp(sym.linkage_name.data(), "main") == 0) {
             main_symbol = &sym;
         }
     }
