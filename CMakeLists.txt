@@ -23,6 +23,13 @@ set (IR_SRCS
 
 
 add_library(lib_objects OBJECT ${IR_SRCS})
+add_library(irpgt STATIC ${IR_SRCS})
+set_target_properties(irpgt PROPERTIES PUBLIC_HEADER "src/ir.h;src/linker_object.h;src/general.h")
+install(TARGETS irpgt EXPORT irpgtConfig
+        LIBRARY DESTINATION lib
+        PUBLIC_HEADER DESTINATION include/irpgt
+)
+install(EXPORT irpgtConfig DESTINATION cmake)
 
 if (ENABLE_PROGRAMS)
     add_executable(bf programs/bf.cpp)
