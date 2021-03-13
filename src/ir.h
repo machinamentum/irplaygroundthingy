@@ -87,7 +87,7 @@ Type *make_func_type(Type *result_type, const Array_Slice<Type *> &parameters = 
     type->alignment = type->size;
 
     for (auto p : parameters) {
-        type->function.parameters.add(p);
+        type->function.parameters.push_back(p);
     }
     type->function.is_varargs = is_varargs;
     return type;
@@ -134,11 +134,11 @@ bool types_match(Type *a, Type *b) {
     }
 
     if (a->type == Type::FUNCTION) {
-        if (a->function.parameters.count != b->function.parameters.count) return false;
+        if (a->function.parameters.size() != b->function.parameters.size()) return false;
         if (!types_match(a->function.result_type, b->function.result_type)) return false;
         if (a->function.is_varargs != b->function.is_varargs) return false;
 
-        for (u32 i = 0; i < a->function.parameters.count; ++i) {
+        for (u32 i = 0; i < a->function.parameters.size(); ++i) {
             if (!types_match(a->function.parameters[i], b->function.parameters[i])) return false;
         }
 
@@ -229,7 +229,7 @@ Constant *make_pointer_constant(u64 value, Type *value_type) {
 
 struct Instruction : Value {
     Basic_Block *inserted_into_block = nullptr;
-    u32 insertion_index = 0xFFFFFFFF;
+    size_t insertion_index = SIZE_T_MAX;
     bool emitted = false;
 };
 
@@ -310,7 +310,7 @@ struct Basic_Block : Value {
     Array<Instruction *> instructions;
 
     Function *inserted_into_function = nullptr;
-    u32 insertion_index = 0xFFFFFFFF;
+    size_t insertion_index = SIZE_T_MAX;
 
     // For code gen
     u64 text_location = 0;
@@ -318,9 +318,9 @@ struct Basic_Block : Value {
     Array<u32 *> text_ptrs_for_fixup;
 
     bool has_terminator() {
-        if (instructions.count == 0) return false;
+        if (instructions.size() == 0) return false;
 
-        auto last = instructions[instructions.count-1];
+        auto last = instructions[instructions.size()-1];
         return last->type == INSTRUCTION_BRANCH || last->type == INSTRUCTION_RETURN;
     }
 
@@ -329,8 +329,8 @@ struct Basic_Block : Value {
         assert(inst->inserted_into_block == nullptr);
 
         inst->inserted_into_block = this;
-        inst->insertion_index = this->instructions.count;
-        this->instructions.add(inst);
+        inst->insertion_index = this->instructions.size();
+        this->instructions.push_back(inst);
     }
 };
 
@@ -369,10 +369,10 @@ struct Function : Global_Value {
     s32 largest_call_stack_adjustment = 0;
 
     void insert(Basic_Block *block) {
-        block->insertion_index = this->blocks.count;
+        block->insertion_index = this->blocks.size();
         block->inserted_into_function = this;
 
-        this->blocks.add(block);
+        this->blocks.push_back(block);
     }
 };
 
@@ -522,15 +522,21 @@ Instruction_Call *make_call(Value *target, const Array_Slice<Value *> &parameter
 
     auto func_type = target->value_type;
 
-    if (func_type->function.is_varargs) assert(parameters.count >= func_type->function.parameters.count);
-    else                                assert(parameters.count == func_type->function.parameters.count);
+    if (parameters.size() < func_type->function.parameters.size())
+        printf("Expected %zu arguments, got %zu\n", func_type->function.parameters.size(), parameters.size());
+
+    if (!func_type->function.is_varargs && parameters.size() > func_type->function.parameters.size())
+        printf("Expected %zu arguments, got %zu\n", func_type->function.parameters.size(), parameters.size());
+
+    if (func_type->function.is_varargs) assert(parameters.size() >= func_type->function.parameters.size());
+    else                                assert(parameters.size() == func_type->function.parameters.size());
 
     for (const auto v : parameters) {
-        call->parameters.add(v);
+        call->parameters.push_back(v);
         v->uses++;
     }
 
-    for (u32 i = 0; i < func_type->function.parameters.count; ++i) {
+    for (u32 i = 0; i < func_type->function.parameters.size(); ++i) {
         auto vt = call->parameters[i]->value_type;
         auto ft = func_type->function.parameters[i];
 

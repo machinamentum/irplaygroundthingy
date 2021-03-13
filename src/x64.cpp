@@ -515,7 +515,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
                 reloc.size = 8;
                 reloc.addend = static_cast<u64>(data_sec_offset);
 
-                code_section->relocations.add(reloc);
+                code_section->relocations.push_back(reloc);
             } else {
                 // lea data-section-location(%rip), %reg
                 s32 *value = lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
@@ -528,7 +528,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
                 reloc.symbol_index = data_section->symbol_index;
                 reloc.size = 4;
 
-                code_section->relocations.add(reloc);
+                code_section->relocations.push_back(reloc);
             }
 
             // if (_register != RAX) move_reg64_to_reg64(&code_section->data, RAX, _register);
@@ -566,7 +566,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
                 reloc.size = 8;
                 reloc.addend = static_cast<u64>(data_sec_offset);
 
-                code_section->relocations.add(reloc);
+                code_section->relocations.push_back(reloc);
 
                 move_memory_to_xmm(&code_section->data, xmm->machine_reg, addr_register_disp(reg->machine_reg), constant->value_type->size);
             } else {
@@ -580,7 +580,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
                 reloc.symbol_index = data_section->symbol_index;
                 reloc.size = 4;
 
-                code_section->relocations.add(reloc);
+                code_section->relocations.push_back(reloc);
             }
 
             free_register(reg);
@@ -597,9 +597,9 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
         s32 *value = lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
 
         auto offset = code_section->data.size() - 4;
-        block->text_locations_needing_addr_fixup.add(offset);
+        block->text_locations_needing_addr_fixup.push_back(offset);
 
-        block->text_ptrs_for_fixup.add((u32 *)value);
+        block->text_ptrs_for_fixup.push_back((u32 *)value);
         return reg->machine_reg;
     } else if (value->type == INSTRUCTION_ALLOCA) {
         auto _alloca = static_cast<Instruction_Alloca *>(value);
@@ -878,8 +878,8 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             u8 integer_param_index = 0;
             u8 float_param_index   = 0;
 
-            assert(call->parameters.count <= function->parameter_registers.count); // @Incomplete
-            for (u32 i = 0; i < call->parameters.count; ++i) {
+            assert(call->parameters.size() <= function->parameter_registers.size()); // @Incomplete
+            for (u32 i = 0; i < call->parameters.size(); ++i) {
                 auto p = call->parameters[i];
                 u8 param_reg = function->parameter_registers[integer_param_index];
                 u8 int_param_reg = param_reg;
@@ -915,7 +915,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                         move_reg64_to_reg64(&code_section->data, result, param_reg);
                 }
 
-                if (is_float && object->target.is_win32() && func_type->function.is_varargs && i >= func_type->function.parameters.count) {
+                if (is_float && object->target.is_win32() && func_type->function.is_varargs && i >= func_type->function.parameters.size()) {
                     // move float value into corresponding integer register slot
                     movq_xmm_to_reg(&code_section->data, param_reg, int_param_reg, 8);
                 }
@@ -946,7 +946,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 reloc.size = 8;
                 reloc.addend = 0; // @TODO
 
-                code_section->relocations.add(reloc);
+                code_section->relocations.push_back(reloc);
 
                 code_section->data.append_byte(REX(1, 0, 0, 0));
                 code_section->data.append_byte(0xFF); // callq reg
@@ -966,7 +966,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 *addr = 0;
                 reloc.addend = 0; // @TODO
 
-                code_section->relocations.add(reloc);
+                code_section->relocations.push_back(reloc);
             }
 
             return RAX;
@@ -976,7 +976,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             Instruction_Return *ret = static_cast<Instruction_Return *>(inst);
 
             s32 *stack_size_target = add_imm32_to_reg64(&code_section->data, RSP, 0, 8);
-            function->stack_size_fixups.add(stack_size_target);
+            function->stack_size_fixups.push_back(stack_size_target);
 
             if (ret->return_value) {
                 u8 lhs_reg = maybe_get_instruction_register(ret->return_value);
@@ -1032,10 +1032,10 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
                     // @Cutnpaste from emit_load_of_value
                     auto offset = code_section->data.size();
-                    block->text_locations_needing_addr_fixup.add(offset);
+                    block->text_locations_needing_addr_fixup.push_back(offset);
 
                     u32 *value = code_section->data.allocate_unaligned<u32>();
-                    block->text_ptrs_for_fixup.add(value);
+                    block->text_ptrs_for_fixup.push_back(value);
                 } else {
                     *jne_disp = 3; // skip the next jmp instruction
 
@@ -1047,7 +1047,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             }
 
             Basic_Block *next_block = nullptr;
-            for (u64 i = 0; i < function->blocks.count-1; ++i) {
+            for (u64 i = 0; i < function->blocks.size()-1; ++i) {
                 if (function->blocks[i] == current_block) {
                     next_block = function->blocks[i+1];
                     break;
@@ -1063,10 +1063,10 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
                     // @Cutnpaste from emit_load_of_value
                     auto offset = code_section->data.size();
-                    block->text_locations_needing_addr_fixup.add(offset);
+                    block->text_locations_needing_addr_fixup.push_back(offset);
 
                     u32 *value = code_section->data.allocate_unaligned<u32>();
-                    block->text_ptrs_for_fixup.add(value);
+                    block->text_ptrs_for_fixup.push_back(value);
                 } else {
                     u8 target = emit_load_of_value(object, function, code_section, data_section, branch->true_target);
 
@@ -1099,7 +1099,7 @@ namespace josh {
 
 void x64_emit_function(Linker_Object *object, Section *code_section, Section *data_section, Function *function) {
     if (function->intrinsic_id) return;
-    if (function->uses == 0 && (function->blocks.count == 0)) {
+    if (function->uses == 0 && (function->blocks.size() == 0)) {
         // Function isn't used and is externally defined so we don't need
         // to emit anything, or even add this to the symbol table.
         return;
@@ -1108,39 +1108,39 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
     u32 symbol_index = get_symbol_index(object, function);
     Symbol *sym = &object->symbol_table[symbol_index];
     sym->is_function = true;
-    sym->is_externally_defined = (function->blocks.count == 0);
+    sym->is_externally_defined = (function->blocks.size() == 0);
     if (sym->is_externally_defined) return;
 
     if (!sym->is_externally_defined) sym->section_number = code_section->section_number;
     sym->section_offset = code_section->data.size();
 
     if (object->target.is_win32()) {
-        function->parameter_registers.add(RCX);
-        function->parameter_registers.add(RDX);
-        function->parameter_registers.add(R8);
-        function->parameter_registers.add(R9);
+        function->parameter_registers.push_back(RCX);
+        function->parameter_registers.push_back(RDX);
+        function->parameter_registers.push_back(R8);
+        function->parameter_registers.push_back(R9);
     } else {
-        function->parameter_registers.add(RDI);
-        function->parameter_registers.add(RSI);
-        function->parameter_registers.add(RDX);
-        function->parameter_registers.add(RCX);
-        function->parameter_registers.add(R8);
-        function->parameter_registers.add(R9);
+        function->parameter_registers.push_back(RDI);
+        function->parameter_registers.push_back(RSI);
+        function->parameter_registers.push_back(RDX);
+        function->parameter_registers.push_back(RCX);
+        function->parameter_registers.push_back(R8);
+        function->parameter_registers.push_back(R9);
     }
 
-    function->register_usage.add(make_reg(RAX));
-    function->register_usage.add(make_reg(RCX));
-    function->register_usage.add(make_reg(RDX));
-    function->register_usage.add(make_reg(RBX));
-    function->register_usage.add(make_reg(RSP, false));
-    function->register_usage.add(make_reg(RBP, false));
-    function->register_usage.add(make_reg(RSI));
-    function->register_usage.add(make_reg(RDI));
-    function->register_usage.add(make_reg(R8));
-    function->register_usage.add(make_reg(R9));
+    function->register_usage.push_back(make_reg(RAX));
+    function->register_usage.push_back(make_reg(RCX));
+    function->register_usage.push_back(make_reg(RDX));
+    function->register_usage.push_back(make_reg(RBX));
+    function->register_usage.push_back(make_reg(RSP, false));
+    function->register_usage.push_back(make_reg(RBP, false));
+    function->register_usage.push_back(make_reg(RSI));
+    function->register_usage.push_back(make_reg(RDI));
+    function->register_usage.push_back(make_reg(R8));
+    function->register_usage.push_back(make_reg(R9));
 
     for (u8 i = 0; i <= XMM15; ++i) {
-        function->xmm_usage.add(make_reg(i));
+        function->xmm_usage.push_back(make_reg(i));
     }
 
     // :WastefulPushPops: @Cleanup pushing all the registers we may need is
@@ -1157,7 +1157,7 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
 
     move_reg64_to_reg64(&code_section->data, RSP, RBP);
 
-    for (u32 i = 0; i < function->arguments.count; ++i) {
+    for (u32 i = 0; i < function->arguments.size(); ++i) {
         Argument *arg = function->arguments[i];
         claim_register(function, &code_section->data, &function->register_usage[function->parameter_registers[i]], arg);
     }
@@ -1177,13 +1177,13 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
 
 
     s32 *stack_size_target = sub_imm32_from_reg64(&code_section->data, RSP, 0, 8);
-    function->stack_size_fixups.add(stack_size_target);
+    function->stack_size_fixups.push_back(stack_size_target);
 
     // Touch stack pages from top to bottom
     // to release stack pages from the page guard system.
     if (object->target.is_win32()) {
         s32 *move_stack_size_to_rax = (s32 *)move_imm64_to_reg64(&code_section->data, 0, RAX, 4); // 4-byte immediate
-        function->stack_size_fixups.add(move_stack_size_to_rax);
+        function->stack_size_fixups.push_back(move_stack_size_to_rax);
 
         auto loop_start = code_section->data.size();
         sub_imm32_from_reg64(&code_section->data, RAX, 4096, 8);
@@ -1218,7 +1218,7 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
     }
 
     for (auto block : function->blocks) {
-        for (u64 i = 0; i < block->text_locations_needing_addr_fixup.count; ++i) {
+        for (u64 i = 0; i < block->text_locations_needing_addr_fixup.size(); ++i) {
             u64 location = block->text_locations_needing_addr_fixup[i];
             u32 *addr    = block->text_ptrs_for_fixup[i];
 

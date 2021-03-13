@@ -10,12 +10,16 @@
 #include <new>
 #include <initializer_list>
 #include <string_view>
+#include <vector>
 
 #include <stdio.h>
 
 namespace josh {
 
 using String = std::string_view;
+
+template <typename T>
+using Array = std::vector<T>;
 
 typedef uint64_t u64;
 typedef uint32_t u32;
@@ -32,90 +36,34 @@ const u16 U16_MAX = 0xFFFF;
 const u32 U32_MAX = 0xFFFFFFFF;
 
 template <typename T>
-struct Array {
-    T *data = nullptr;
-    u32 count    = 0;
-    u32 reserved = 0;
-
-    static const u32 DEFAULT_ARRAY_RESERVE_SIZE = 16;
-
-    void reserve(u32 amount) {
-        if (amount <= reserved) return;
-        if (amount < DEFAULT_ARRAY_RESERVE_SIZE) amount = DEFAULT_ARRAY_RESERVE_SIZE;
-
-        data     = (T *)realloc(data, amount*sizeof(T));
-        reserved = amount;
-    }
-
-    void resize(u32 amount) {
-        auto old_amount = count;
-        reserve(amount);
-        count = amount;
-
-        for (; old_amount < count; ++old_amount) {
-            new (data + old_amount) T();
-        }
-    }
-
-    void add(T element) {
-        if (count+1 >= reserved) reserve(reserved + DEFAULT_ARRAY_RESERVE_SIZE);
-
-        data[count] = element;
-        count += 1;
-    }
-
-    void reset() {
-        free(data);
-        data     = nullptr;
-        count    = 0;
-        reserved = 0;
-    }
-
-    T &operator[](size_t index) {
-        assert(index <= U32_MAX);
-        assert(index < count);
-        return data[index];
-    }
-
-    T *begin() {
-        return &data[0];
-    }
-
-    T *end() {
-        if (count) return &data[count];
-        return nullptr;
-    }
-};
-
-template <typename T>
 struct Array_Slice {
     bool list_initialized = false;
     T *data;
-    size_t count;
+    size_t _count;
 
     Array_Slice() {
         list_initialized = false;
         data = nullptr;
-        count = 0;
+        _count = 0;
     }
 
     Array_Slice(const Array_Slice<T> &other) {
         list_initialized = false;
         data = other.data;
-        count = other.count;
+        _count = other._count;
     }
 
     Array_Slice(const Array<T> &a) {
         list_initialized = false;
-        data  = a.data;
-        count = a.count;
+        data   = const_cast<T *>(a.data());
+        _count = a.size();
     }
 
     Array_Slice(std::initializer_list<T> list) {
-        count = list.size();
-        data = (T *)malloc(sizeof(T) * count);
+        _count = list.size();
+        data = (T *)malloc(sizeof(T) * _count);
 
-        memcpy(data, list.begin(), sizeof(T) * count);
+        memcpy(data, list.begin(), sizeof(T) * _count);
 
         list_initialized = true;
     }
@@ -124,16 +72,21 @@ struct Array_Slice {
         if (list_initialized && data) free(data);
 
         data  = nullptr;
-        count = 0;
+        _count = 0;
     }
 
-    T *begin() const {
+    const T *begin() const {
         return &data[0];
     }
 
-    T *end() const {
-        if (count) return &data[count];
+    const T *end() const {
+        if (_count) return &data[_count];
         return nullptr;
+    }
+
+    size_t size() const
+    {
+        return _count;
     }
 };
 
@@ -164,12 +117,12 @@ struct Data_Buffer {
         c.count    = 0;
         c.reserved = size;
 
-        chunks.add(c);
-        return &chunks[chunks.count-1];
+        chunks.push_back(c);
+        return &chunks[chunks.size()-1];
     }
 
     void append(const void *src, size_t size) {
-        Chunk *c = &chunks[chunks.count-1];
+        Chunk *c = &chunks[chunks.size()-1];
         if (c->count+size >= c->reserved) c = new_chunk(size);
 
         memcpy(c->data+c->count, src, size);
@@ -181,7 +134,7 @@ struct Data_Buffer {
     }
 
     void *allocate_bytes_unaligned(size_t size) {
-        Chunk *c = &chunks[chunks.count-1];
+        Chunk *c = &chunks[chunks.size()-1];
         if (c->count+size >= c->reserved) c = new_chunk(size);
 
         void *result = c->data+c->count;
@@ -198,7 +151,7 @@ struct Data_Buffer {
     T *allocate() {
         size_t align = alignof(T);
 
-        Chunk *c = &chunks[chunks.count-1];
+        Chunk *c = &chunks[chunks.size()-1];
         auto count = ensure_aligned(c->count, align);
         if (count+sizeof(T) >= c->reserved) c = new_chunk(sizeof(T));
 

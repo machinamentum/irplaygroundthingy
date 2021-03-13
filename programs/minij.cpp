@@ -847,9 +847,9 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
                 auto a = call->arguments[i];
 
                 Type *param_type = nullptr;
-                if (i < func_type->function.parameters.count) param_type = func_type->function.parameters[i];
+                if (i < func_type->function.parameters.size()) param_type = func_type->function.parameters[i];
 
-                args.add(emit_expression(a, function, unit, irfunc, irm, param_type));
+                args.push_back(emit_expression(a, function, unit, irfunc, irm, param_type));
             }
 
             
@@ -961,10 +961,7 @@ void emit_scope(AST::Scope *scope, AST::Function *function, Compilation_Unit *un
 }
 
 Array_Slice<Type *> to_slice(std::vector<Type *> &v) {
-    Array_Slice<Type *> types;
-    types.data = v.data();
-    types.count = v.size();
-    return types;
+    return Array_Slice<Type *>(v);
 }
 
 std::vector<DLL_Handle> loaded_dlls;
@@ -1068,12 +1065,12 @@ int main(int argc, char **argv) {
         for (auto var : function->arguments) {
             Argument *arg = make_arg(var->expr_type);
             var->storage = arg;
-            func->arguments.add(arg);
+            func->arguments.push_back(arg);
             arg_types.push_back(var->expr_type);
         }
 
         func->value_type = make_func_type(function->return_type, to_slice(arg_types), function->is_varargs);
-        unit.functions.add(func);
+        unit.functions.push_back(func);
 
         if (function->body) {
             Basic_Block *block = new Basic_Block();

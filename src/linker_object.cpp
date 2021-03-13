@@ -42,12 +42,12 @@ namespace josh {
 
 u32 get_symbol_index(Linker_Object *object, Global_Value *value) {
     if (value->symbol_index == 0) {
-        value->symbol_index = static_cast<u32>(object->symbol_table.count);
+        value->symbol_index = static_cast<u32>(object->symbol_table.size());
         Symbol s;
         s.linkage_name = value->name;
-        object->symbol_table.add(s);
+        object->symbol_table.push_back(s);
 
-        assert(object->symbol_table.count <= U32_MAX);
+        assert(object->symbol_table.size() <= U32_MAX);
     }
 
     return value->symbol_index;
@@ -69,8 +69,8 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
         } else {
             data_sec.name = ".data";
         }
-        data_sec.section_number = static_cast<u8>(object->sections.count+1);
-        data_sec.symbol_index = static_cast<u32>(object->symbol_table.count);
+        data_sec.section_number = static_cast<u8>(object->sections.size()+1);
+        data_sec.symbol_index = static_cast<u32>(object->symbol_table.size());
         data_sec.is_writable = true;
 
         Symbol sym;
@@ -81,11 +81,11 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
         sym.is_function = false;
         sym.is_section  = true;
 
-        object->symbol_table.add(sym);
+        object->symbol_table.push_back(sym);
 
         data_sec_index = data_sec.section_number-1;
 
-        object->sections.add(data_sec);
+        object->sections.push_back(data_sec);
     }
 
     {
@@ -97,8 +97,8 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
         } else {
             text_sec.name = ".text";
         }
-        text_sec.section_number = static_cast<u8>(object->sections.count+1);
-        text_sec.symbol_index = static_cast<u32>(object->symbol_table.count);
+        text_sec.section_number = static_cast<u8>(object->sections.size()+1);
+        text_sec.symbol_index = static_cast<u32>(object->symbol_table.size());
         text_sec.is_pure_instructions = true;
 
         Symbol sym;
@@ -109,11 +109,11 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
         sym.is_function = false;
         sym.is_section  = true;
 
-        object->symbol_table.add(sym);
+        object->symbol_table.push_back(sym);
 
         text_sec_index = text_sec.section_number-1;
 
-        object->sections.add(text_sec);
+        object->sections.push_back(text_sec);
     }
 
     for (auto func : unit->functions) {
@@ -123,8 +123,8 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
         //     AArch64_emit_function(object, &object->sections[text_sec_index], &object->sections[data_sec_index], func);
     }
 
-    assert(object->symbol_table.count <= U32_MAX);
-    assert(object->sections.count     <= U8_MAX);
+    assert(object->symbol_table.size() <= U32_MAX);
+    assert(object->sections.size()     <= U8_MAX);
 
     if (text_index) *text_index = text_sec_index;
     if (data_index) *data_index = data_sec_index;
@@ -166,7 +166,7 @@ void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callb
 
     Array<DLL_Handle> dlls_to_search;
 
-    dlls_to_search.add(dll_open(nullptr));
+    dlls_to_search.push_back(dll_open(nullptr));
 
 #ifndef _WIN32
     char *text_memory = (char *)mmap(nullptr, code_section->data.size(), PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT, -1, 0);
@@ -180,7 +180,7 @@ void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callb
         DWORD old_prot;
         VirtualProtect(text_memory, code_section->data.size(), PAGE_EXECUTE_READWRITE, &old_prot);
 
-        dlls_to_search.add(dll_open("msvcrt.dll"));
+        dlls_to_search.push_back(dll_open("msvcrt.dll"));
     }
 #endif
     char *data_memory = (char *)malloc(data_section->data.size());
@@ -198,8 +198,8 @@ void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callb
     }
 
     Array<char *> section_memory;
-    section_memory.add(data_memory);
-    section_memory.add(text_memory);
+    section_memory.push_back(data_memory);
+    section_memory.push_back(text_memory);
 
     bool error = false;
 

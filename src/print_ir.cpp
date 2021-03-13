@@ -13,11 +13,11 @@ void print(Type *type) {
             print(type->function.result_type);
             printf(" (");
 
-            for (u32 i = 0; i < type->function.parameters.count; ++i) {
+            for (u32 i = 0; i < type->function.parameters.size(); ++i) {
                 auto param = type->function.parameters[i];
                 print(param);
 
-                if (i < type->function.parameters.count-1 || type->function.is_varargs) printf(", ");
+                if (i < type->function.parameters.size()-1 || type->function.is_varargs) printf(", ");
             }
 
             if (type->function.is_varargs) printf("...");

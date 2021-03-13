@@ -86,10 +86,10 @@ void emit_coff_file(Linker_Object *object) {
     PE_Coff_Header *header = buffer.allocate_unaligned<PE_Coff_Header>();
     header->Machine              = IMAGE_FILE_MACHINE_AMD64;
 
-    header->NumberOfSections     = static_cast<u16>(object->sections.count);
+    header->NumberOfSections     = static_cast<u16>(object->sections.size());
     header->TimeDateStamp        = 0; // @TODO
     // header->PointerToSymbolTable = ;
-    header->NumberOfSymbols      = object->symbol_table.count;
+    header->NumberOfSymbols      = object->symbol_table.size();
     header->SizeOfOptionalHeader = 0;
     header->Characteristics      = 0;
 
@@ -115,11 +115,11 @@ void emit_coff_file(Linker_Object *object) {
         if (sect.is_writable)          Characteristics |= IMAGE_SCN_MEM_WRITE;
         if (sect.is_pure_instructions) Characteristics |= (IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_CNT_CODE);
 
-        if (sect.relocations.count >= 0xFFFF) {
+        if (sect.relocations.size() >= 0xFFFF) {
             section->NumberOfRelocations = 0xFFFF;
             Characteristics |= IMAGE_SCN_LNK_NRELOC_OVFL;
         } else {
-            section->NumberOfRelocations = static_cast<u16>(sect.relocations.count);
+            section->NumberOfRelocations = static_cast<u16>(sect.relocations.size());
         }
 
         section->NumberOfLinenumbers = 0;
@@ -138,7 +138,7 @@ void emit_coff_file(Linker_Object *object) {
         if (section->Characteristics & IMAGE_SCN_LNK_NRELOC_OVFL) {
             PE_Coff_Relocation *info = (PE_Coff_Relocation *)buffer.allocate_bytes_unaligned(PE_COFF_RELOCATION_SIZE);
 
-            info->VirtualAddress   = sect.relocations.count;
+            info->VirtualAddress   = sect.relocations.size();
             info->SymbolTableIndex = 0;
             info->Type             = 0;
         }

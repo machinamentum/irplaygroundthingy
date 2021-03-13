@@ -72,8 +72,8 @@ void old_test() {
         irm->insert_return();
     }
     
-    unit.functions.add(printf_func);
-    unit.functions.add(main_func);
+    unit.functions.push_back(printf_func);
+    unit.functions.push_back(main_func);
 
 
     emit_obj_file(&unit);

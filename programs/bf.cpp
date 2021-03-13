@@ -190,10 +190,10 @@ int main(int argc, char **argv) {
     Function *main_func = new Function();
     main_func->name = "main";
 
-    unit.functions.add(putchar_func);
-    unit.functions.add(getchar_func);
-    unit.functions.add(memset_func);
-    unit.functions.add(main_func);
+    unit.functions.push_back(putchar_func);
+    unit.functions.push_back(getchar_func);
+    unit.functions.push_back(memset_func);
+    unit.functions.push_back(main_func);
 
     Basic_Block *block = new Basic_Block();
     main_func->insert(block);
@@ -216,7 +216,7 @@ int main(int argc, char **argv) {
 
     gen_bf_instruction(main_func, bfg);
 
-    main_func->blocks[main_func->blocks.count-1]->insert(new Instruction_Return());
+    main_func->blocks[main_func->blocks.size()-1]->insert(new Instruction_Return());
 
     // emit_obj_file(&unit);
     do_jit_and_run_program_main(&unit);
