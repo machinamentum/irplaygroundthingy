@@ -8,90 +8,12 @@ using namespace josh;
 
 namespace josh {
 
-struct Bump_Allocator
-{
-    struct Chunk
-    {
-        const static u32 DEFAULT_SIZE_BYTES = 4096;
-        char *data;
-        u32 size;
-        u32 used;
-
-        bool bump_to_alignment(u8 align)
-        {
-            if (size-used < align)
-                return false;
-
-            if (used & (align-1))
-                used += align - (used & (align-1));
-
-            return true;
-        }
-    };
-
-    Array<Chunk> chunks;
-
-    Bump_Allocator()
-    {
-        new_chunk();
-    }
-
-    Chunk *new_chunk(u32 size = Chunk::DEFAULT_SIZE_BYTES)
-    {
-        size = (size < Chunk::DEFAULT_SIZE_BYTES) ? Chunk::DEFAULT_SIZE_BYTES : size;
-        Chunk c;
-        c.data = reinterpret_cast<char *>(malloc(size));
-        c.size = size;
-        c.used = 0;
-        chunks.emplace_back(std::move(c));
-        return &chunks.back();
-    }
-
-    Chunk *get_current()
-    {
-        return &chunks.back();
-    }
-
-    template<typename T>
-    T *allocate()
-    {
-        Chunk *c = get_current();
-        if (!c->bump_to_alignment(alignof(T)))
-            c = new_chunk(sizeof(T));
-        if (c->size-c->used < sizeof(T))
-            c = new_chunk(sizeof(T));
-
-        T *o = reinterpret_cast<T *>(c->data + c->used);
-        c->used += sizeof(T);
-        return o;
-    }
-
-    char *allocate_string(u32 bytes)
-    {
-        Chunk *c = get_current();
-        if (c->size-c->used < bytes)
-            c = new_chunk(bytes);
-
-        char *o = c->data + c->used;
-        c->used += bytes;
-        return o;
-    }
-
-    const char *append_string(const String &str)
-    {
-        char *mem = allocate_string(str.length()+1);
-        memcpy(mem, str.data(), str.length());
-        mem[str.length()] = 0;
-        return mem;
-    }
-};
-
 typedef u64 String_ID;
 const static String_ID STRING_ID_EMPTY = 0;
 
 struct String_Table
 {
-    Bump_Allocator string_storage;
+    Bump_Allocator<> string_storage;
 
     struct String_Entry
     {

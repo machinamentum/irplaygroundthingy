@@ -101,25 +101,24 @@ T ensure_aligned(T value, T alignment) {
     return value;
 }
 
-struct Data_Buffer {
+template <size_t DEFAULT_CHUNK_SIZE = 8192>
+struct Bump_Allocator {
     struct Chunk {
-        u8 *data      = nullptr;
+        char *data      = nullptr;
         size_t count     = 0;
         size_t reserved  = 0;
     };
 
     Array<Chunk> chunks;
 
-    Data_Buffer() {
+    Bump_Allocator() {
         new_chunk();
     }
-
-    const static size_t DEFAULT_CHUNK_SIZE = 4096 * 256; // 1MB
 
     Chunk *new_chunk(size_t size = DEFAULT_CHUNK_SIZE) {
         if (size < DEFAULT_CHUNK_SIZE) size = DEFAULT_CHUNK_SIZE;
         Chunk c;
-        c.data     = (u8 *)malloc(size);
+        c.data     = (char *)malloc(size);
         c.count    = 0;
         c.reserved = size;
 
@@ -127,16 +126,18 @@ struct Data_Buffer {
         return &chunks[chunks.size()-1];
     }
 
-    void append(const void *src, size_t size) {
+    char *append(const void *src, size_t size) {
         Chunk *c = &chunks[chunks.size()-1];
         if (c->count+size >= c->reserved) c = new_chunk(size);
 
-        memcpy(c->data+c->count, src, size);
+        char *out = c->data+c->count;
+        memcpy(out, src, size);
         c->count += size;
+        return out;
     }
 
-    void append_string(const String& s) {
-        append(s.data(), (u32)s.length());
+    char *append_string(const String& s) {
+        return append(s.data(), (u32)s.length());
     }
 
     void *allocate_bytes_unaligned(size_t size) {
@@ -167,7 +168,7 @@ struct Data_Buffer {
         return (T *)result;
     }
 
-    void append(Data_Buffer *other) {
+    void append(Bump_Allocator<DEFAULT_CHUNK_SIZE> *other) {
         for (auto &c : other->chunks) {
             append(c.data, c.count);
         }
@@ -185,6 +186,8 @@ struct Data_Buffer {
         return size;
     }
 };
+
+using Data_Buffer = Bump_Allocator<1024 * 1024>; // 1MB
 
 } // namespace josh
 
