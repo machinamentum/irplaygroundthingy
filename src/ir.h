@@ -189,7 +189,9 @@ inline
 Constant *make_string_constant(const String &value) {
     Constant *con = new Constant();
     con->constant_type = Constant::STRING;
-    con->string_value = value;
+    char *buffer = (char *)malloc(value.length()); // @Leak
+    memcpy(buffer, value.data(), value.length());
+    con->string_value = String{buffer, value.length()};
     con->value_type = make_pointer_type(make_integer_type(1));
     return con;
 }
@@ -230,7 +232,6 @@ Constant *make_pointer_constant(u64 value, Type *value_type) {
 struct Instruction : Value {
     Basic_Block *inserted_into_block = nullptr;
     size_t insertion_index = SIZE_T_MAX;
-    bool emitted = false;
 };
 
 struct Instruction_Call : Instruction {

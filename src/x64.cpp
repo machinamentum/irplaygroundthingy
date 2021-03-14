@@ -152,20 +152,6 @@ struct String_Table
         _size += 1;
         return &b.values[b.values.size()-1];
     }
-
-    // String_Entry *lookup(const String_ID id)
-    // {
-    //     const Bucket &b = buckets[id % NUM_BUCKETS];
-    //     u64 idx = id >> 32;
-    //     assert(b.keys.size() > idx && "Key is not an interned string.");
-
-    //     return &b.values[idx];
-    // }
-
-    size_t size()
-    {
-        return _size;
-    }
 };
 
 } // namespace josh
@@ -192,34 +178,39 @@ struct X64_Emitter
 };
 
 
-const u8 RAX = 0;
-const u8 RCX = 1;
-const u8 RDX = 2;
-const u8 RBX = 3;
-const u8 RSP = 4;
-const u8 RBP = 5;
-const u8 RSI = 6;
-const u8 RDI = 7;
-const u8 R8  = 8;
-const u8 R9  = 9;
+enum Integer_Register : u8
+{
+    RAX = 0,
+    RCX = 1,
+    RDX = 2,
+    RBX = 3,
+    RSP = 4,
+    RBP = 5,
+    RSI = 6,
+    RDI = 7,
+    R8  = 8,
+    R9  = 9,
+};
 
-const u8 XMM0  = 0;
-const u8 XMM1  = 1;
-const u8 XMM2  = 2;
-const u8 XMM3  = 3;
-const u8 XMM4  = 4;
-const u8 XMM5  = 5;
-const u8 XMM6  = 6;
-const u8 XMM7  = 7;
-const u8 XMM8  = 8;
-const u8 XMM9  = 9;
-const u8 XMM10 = 10;
-const u8 XMM11 = 11;
-const u8 XMM12 = 12;
-const u8 XMM13 = 13;
-const u8 XMM14 = 14;
-const u8 XMM15 = 15;
-
+enum XMM_Register : u8
+{
+    XMM0  = 0,
+    XMM1  = 1,
+    XMM2  = 2,
+    XMM3  = 3,
+    XMM4  = 4,
+    XMM5  = 5,
+    XMM6  = 6,
+    XMM7  = 7,
+    XMM8  = 8,
+    XMM9  = 9,
+    XMM10 = 10,
+    XMM11 = 11,
+    XMM12 = 12,
+    XMM13 = 13,
+    XMM14 = 14,
+    XMM15 = 15,
+};
 
 template <typename T, typename B>
 bool fits_into(B b) {
@@ -588,19 +579,6 @@ Register *get_free_xmm_register(X64_Emitter *emitter) {
     return nullptr;
 }
 
-Register *claim_register(X64_Emitter *emitter, Register *reg, Value *claimer) {
-    void maybe_spill_register(X64_Emitter *emitter, Register *reg);
-    maybe_spill_register(emitter, reg);
-
-    if (claimer) {
-        reg->currently_holding_result_of_instruction = claimer;
-        claimer->result_stored_in = reg;
-    }
-
-    reg->is_free = false;
-    return reg;
-}
-
 void maybe_spill_register(X64_Emitter *emitter, Register *reg) {
     if (reg->currently_holding_result_of_instruction) {
         auto inst = reg->currently_holding_result_of_instruction;
@@ -616,6 +594,18 @@ void maybe_spill_register(X64_Emitter *emitter, Register *reg) {
     }
 
     reg->is_free = true;
+}
+
+Register *claim_register(X64_Emitter *emitter, Register *reg, Value *claimer) {
+    maybe_spill_register(emitter, reg);
+
+    if (claimer) {
+        reg->currently_holding_result_of_instruction = claimer;
+        claimer->result_stored_in = reg;
+    }
+
+    reg->is_free = false;
+    return reg;
 }
 
 void free_register(Register *reg) {
@@ -884,7 +874,6 @@ Address_Info get_address_value_of_pointer(X64_Emitter *emitter, Linker_Object *o
 }
 
 u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *function, Basic_Block *current_block, Section *code_section, Instruction *inst) {
-    inst->emitted = true;
     switch (inst->type) {
         case INSTRUCTION_ALLOCA: {
             auto _alloca = static_cast<Instruction_Alloca *>(inst);
