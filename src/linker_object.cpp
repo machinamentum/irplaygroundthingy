@@ -205,6 +205,8 @@ void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callb
     section_memory.push_back(data_memory);
     section_memory.push_back(text_memory);
 
+    Map<String, char *> symbol_map;
+
     bool error = false;
 
     for (auto reloc : code_section->relocations) {
@@ -224,21 +226,28 @@ void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callb
         if (symbol->is_externally_defined) {
             char *symbol_target = nullptr;
 
-            if (lookup_sym) {
-                symbol_target = (char *)lookup_sym(unit, symbol->linkage_name.data());
-            }
-
-            if (!symbol_target) {
-                for (auto handle : dlls_to_search) {
-                    symbol_target = (char *)dll_find_symbol(handle, symbol->linkage_name.data());
-                    if (symbol_target) break;
+            if (!symbol_map.count(symbol->linkage_name))
+            {
+                if (lookup_sym) {
+                    symbol_target = (char *)lookup_sym(unit, symbol->linkage_name.data());
                 }
-            }
 
-            if (!symbol_target) {
-                printf("Could not find externally-defined symbol '%s'\n", symbol->linkage_name.data());
-                error = true;
-                continue;
+                if (!symbol_target) {
+                    for (auto handle : dlls_to_search) {
+                        symbol_target = (char *)dll_find_symbol(handle, symbol->linkage_name.data());
+                        if (symbol_target) break;
+                    }
+                }
+
+                if (!symbol_target) {
+                    printf("Could not find externally-defined symbol '%s'\n", symbol->linkage_name.data());
+                    error = true;
+                    continue;
+                }
+
+                symbol_map[symbol->linkage_name] = symbol_target;
+            } else {
+                symbol_target = symbol_map[symbol->linkage_name];
             }
 
             if   (rip) *(u32 *)target = (u32)(symbol_target - target);
