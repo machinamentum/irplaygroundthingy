@@ -1064,6 +1064,8 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
             // Spill all argument passing registers to preserve
             // their values in case the callee wishes to use them
+            // ...this may not be totally correct, we should be spilling
+            // all registers that are not callee-saved. @TODO
             for (auto machine_reg : emitter->parameter_registers) {
                 maybe_spill_register(emitter, &emitter->register_usage[machine_reg]);
             }
