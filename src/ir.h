@@ -186,7 +186,7 @@ struct Constant : Value {
 };
 
 inline
-Constant *make_string_constant(String value) {
+Constant *make_string_constant(const String &value) {
     Constant *con = new Constant();
     con->constant_type = Constant::STRING;
     con->string_value = value;
@@ -354,19 +354,6 @@ struct Function : Global_Value {
 
     Array<Argument *> arguments;
     Array<Basic_Block *> blocks;
-
-    // For code gen
-    Array<Register> register_usage;
-    Array<Register> xmm_usage;
-
-    // @Temporary this information is the same across all functions,
-    // we should put these in Target or something...
-    Array<u8>       parameter_registers;
-
-
-    Array<s32 *>    stack_size_fixups;
-    s32 stack_size = 0;
-    s32 largest_call_stack_adjustment = 0;
 
     void insert(Basic_Block *block) {
         block->insertion_index = this->blocks.size();

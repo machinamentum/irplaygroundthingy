@@ -6,6 +6,183 @@ using namespace josh;
 
 #include <stdio.h>
 
+
+struct Bump_Allocator
+{
+    struct Chunk
+    {
+        const static u32 DEFAULT_SIZE_BYTES = 4096;
+        char *data;
+        u32 size;
+        u32 used;
+
+        bool bump_to_alignment(u8 align)
+        {
+            if (size-used < align)
+                return false;
+
+            if (used & (align-1))
+                used += align - (used & (align-1));
+
+            return true;
+        }
+    };
+
+    Array<Chunk> chunks;
+
+    Bump_Allocator()
+    {
+        new_chunk();
+    }
+
+    Chunk *new_chunk(u32 size = Chunk::DEFAULT_SIZE_BYTES)
+    {
+        size = (size < Chunk::DEFAULT_SIZE_BYTES) ? Chunk::DEFAULT_SIZE_BYTES : size;
+        Chunk c;
+        c.data = reinterpret_cast<char *>(malloc(size));
+        c.size = size;
+        c.used = 0;
+        chunks.emplace_back(std::move(c));
+        return &chunks.back();
+    }
+
+    Chunk *get_current()
+    {
+        return &chunks.back();
+    }
+
+    template<typename T>
+    T *allocate()
+    {
+        Chunk *c = get_current();
+        if (!c->bump_to_alignment(alignof(T)))
+            c = new_chunk(sizeof(T));
+        if (c->size-c->used < sizeof(T))
+            c = new_chunk(sizeof(T));
+
+        T *o = reinterpret_cast<T *>(c->data + c->used);
+        c->used += sizeof(T);
+        return o;
+    }
+
+    char *allocate_string(u32 bytes)
+    {
+        Chunk *c = get_current();
+        if (c->size-c->used < bytes)
+            c = new_chunk(bytes);
+
+        char *o = c->data + c->used;
+        c->used += bytes;
+        return o;
+    }
+
+    const char *append_string(const String &str)
+    {
+        char *mem = allocate_string(str.length()+1);
+        memcpy(mem, str.data(), str.length());
+        mem[str.length()] = 0;
+        return mem;
+    }
+};
+
+typedef u64 String_ID;
+const static String_ID STRING_ID_EMPTY = 0;
+
+struct String_Table
+{
+    Bump_Allocator string_storage;
+
+    struct Bucket
+    {
+        Array<u64>    keys;
+        Array<const char *> values;
+    };
+
+    Bucket *buckets;
+    size_t _size = 0;
+
+    static const size_t NUM_BUCKETS = 0x1000;
+    static const size_t DEFAULT_BUCKET_SIZE = 0x1000;
+
+    String_Table()
+    {
+        buckets = reinterpret_cast<Bucket *>(malloc(sizeof(Bucket) * NUM_BUCKETS));
+
+        for (size_t i = 0; i < NUM_BUCKETS; ++i)
+            new (buckets + i) Bucket();
+    }
+
+    static u32 hash(const String &s)
+    {
+        const char *data = s.data();
+        u32 v = 5381;
+        for (size_t i = 0; i < s.length(); ++i)
+        {
+            v = v * 33 ^ data[i];
+        }
+        return v;
+    }
+
+    String_ID intern(const String &str)
+    {
+        if (str.length() == 0)
+            return STRING_ID_EMPTY;
+
+        u64 key = hash(str);
+        u64 bucket = key & (NUM_BUCKETS-1);
+        Bucket &b = buckets[bucket];
+
+        // TODO I think this could likely be faster by using a dense-hash-set/grouping comparison strategy using SIMD
+        for (size_t i = 0; i < b.keys.size(); ++i)
+        {
+            u64 k = b.keys[i];
+            if (k == key && b.values[i] == str)
+                return String_ID{(i << 32) | (key & 0xFFFFFFFF)};
+        }
+
+        b.keys.push_back(key);
+        b.values.push_back(string_storage.append_string(str));
+        _size += 1;
+        return ((b.keys.size()-1) << 32) | (key & 0xFFFFFFFF);
+    }
+
+    String lookup(const String_ID id)
+    {
+        const Bucket &b = buckets[id % NUM_BUCKETS];
+        u64 idx = id >> 32;
+        assert(b.keys.size() > idx && "Key is not an interned string.");
+
+        return b.values[idx];
+    }
+
+    size_t size()
+    {
+        return _size;
+    }
+};
+
+struct X64_Emitter
+{
+    String_Table string_table;
+
+    Section *data_section;
+    Section *code_section;
+
+    // For code gen
+    Array<Register> register_usage;
+    Array<Register> xmm_usage;
+
+    // @Temporary this information is the same across all functions,
+    // we should put these in Target or something...
+    Array<u8>       parameter_registers;
+
+
+    Array<s32 *>    stack_size_fixups;
+    s32 stack_size = 0;
+    s32 largest_call_stack_adjustment = 0;
+};
+
+
 const u8 RAX = 0;
 const u8 RCX = 1;
 const u8 RDX = 2;
@@ -380,8 +557,8 @@ void move_register_value_to_memory(Data_Buffer *dataptr, u8 value_reg, Address_I
         move_reg_to_memory(dataptr, value_reg, info, type->size);
 }
 
-Register *get_free_register(Function *function) {
-    for (auto &reg : function->register_usage) {
+Register *get_free_register(X64_Emitter *emitter) {
+    for (auto &reg : emitter->register_usage) {
         if (reg.is_free) {
             reg.is_free = false;
             return &reg;
@@ -391,8 +568,8 @@ Register *get_free_register(Function *function) {
     return nullptr;
 }
 
-Register *get_free_xmm_register(Function *function) {
-    for (auto &reg : function->xmm_usage) {
+Register *get_free_xmm_register(X64_Emitter *emitter) {
+    for (auto &reg : emitter->xmm_usage) {
         if (reg.is_free) {
             reg.is_free = false;
             return &reg;
@@ -402,9 +579,9 @@ Register *get_free_xmm_register(Function *function) {
     return nullptr;
 }
 
-Register *claim_register(Function *func, Data_Buffer *dataptr, Register *reg, Value *claimer) {
-    void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg);
-    maybe_spill_register(func, dataptr, reg);
+Register *claim_register(X64_Emitter *emitter, Data_Buffer *dataptr, Register *reg, Value *claimer) {
+    void maybe_spill_register(X64_Emitter *emitter, Register *reg);
+    maybe_spill_register(emitter, reg);
 
     if (claimer) {
         reg->currently_holding_result_of_instruction = claimer;
@@ -415,15 +592,15 @@ Register *claim_register(Function *func, Data_Buffer *dataptr, Register *reg, Va
     return reg;
 }
 
-void maybe_spill_register(Function *func, Data_Buffer *dataptr, Register *reg) {
+void maybe_spill_register(X64_Emitter *emitter, Register *reg) {
     if (reg->currently_holding_result_of_instruction) {
         auto inst = reg->currently_holding_result_of_instruction;
         inst->result_stored_in = nullptr;
 
         if (inst->result_spilled_onto_stack == 0 && inst->uses) {
-            func->stack_size += 8; // @TargetInfo
-            inst->result_spilled_onto_stack = -func->stack_size;
-            move_register_value_to_memory(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type);
+            emitter->stack_size += 8; // @TargetInfo
+            inst->result_spilled_onto_stack = -emitter->stack_size;
+            move_register_value_to_memory(&emitter->code_section->data, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type);
         }
 
         reg->currently_holding_result_of_instruction = nullptr;
@@ -437,16 +614,16 @@ void free_register(Register *reg) {
     reg->is_free = true;
 }
 
-Register *get_free_or_suggested_register(Function *function, Data_Buffer *dataptr, u8 suggested_register, bool force_use_suggested, Value *inst) {
+Register *get_free_or_suggested_register(X64_Emitter *emitter, u8 suggested_register, bool force_use_suggested, Value *inst) {
     Register *reg = nullptr;
 
     if (!force_use_suggested) {
-        reg = get_free_register(function);
+        reg = get_free_register(emitter);
         if (!reg) {
 
             u32 uses = U32_MAX;
             Register *regi;
-            for (auto &reg : function->register_usage) {
+            for (auto &reg : emitter->register_usage) {
                 if (reg.machine_reg == RSP || reg.machine_reg == RBP) continue;
 
                 if (reg.currently_holding_result_of_instruction) {
@@ -463,36 +640,39 @@ Register *get_free_or_suggested_register(Function *function, Data_Buffer *datapt
         }
     }
 
-    if (!reg) reg = &function->register_usage[suggested_register];
+    if (!reg) reg = &emitter->register_usage[suggested_register];
     
-    maybe_spill_register(function, dataptr, reg);
-    if (inst) return claim_register(function, dataptr, reg, inst);
+    Data_Buffer *dataptr = &emitter->code_section->data;
+    maybe_spill_register(emitter, reg);
+    if (inst) return claim_register(emitter, dataptr, reg, inst);
 
     
     return reg;
 }
 
-u8 load_instruction_result(Function *function, Data_Buffer *dataptr, Value *inst, u8 suggested_register, bool force_use_suggested) {
+u8 load_instruction_result(X64_Emitter *emitter, Value *inst, u8 suggested_register, bool force_use_suggested) {
     if (auto reg = inst->result_stored_in) {
         assert(reg->currently_holding_result_of_instruction == inst);
         return reg->machine_reg;
     } else {
         assert(!inst->result_stored_in);
-        reg = get_free_or_suggested_register(function, dataptr, suggested_register, force_use_suggested, inst);
+        reg = get_free_or_suggested_register(emitter, suggested_register, force_use_suggested, inst);
 
         assert(inst->result_spilled_onto_stack != 0);
-        move_memory_value_to_register(dataptr, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type);
+        move_memory_value_to_register(&emitter->code_section->data, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type);
         return reg->machine_reg;
     }
 }
 
 
-u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_section, Section *data_section, Value *value, u8 suggested_register = RAX, bool force_use_suggested = false) {
+u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code_section, Value *value, u8 suggested_register = RAX, bool force_use_suggested = false) {
     if (value->type == VALUE_CONSTANT) {
         auto constant = static_cast<Constant *>(value);
 
-        Register *reg = get_free_or_suggested_register(function, &code_section->data, suggested_register, force_use_suggested, nullptr);
+        Register *reg = get_free_or_suggested_register(emitter, suggested_register, force_use_suggested, nullptr);
         reg->is_free = false;
+
+        Section *data_section = emitter->data_section;
 
         if (constant->constant_type == Constant::STRING) {
             u32 data_sec_offset = data_section->data.size();
@@ -535,11 +715,11 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
         } else if (constant->constant_type == Constant::INTEGER) {
             move_imm64_to_reg64(&code_section->data, constant->integer_value, reg->machine_reg, constant->value_type->size);
         } else if (constant->constant_type == Constant::FLOAT) {
-            Register *xmm = get_free_xmm_register(function);
+            Register *xmm = get_free_xmm_register(emitter);
             if (!xmm) {
-                xmm = claim_register(function, &code_section->data, &function->xmm_usage[XMM0], value);
+                xmm = claim_register(emitter, &code_section->data, &emitter->xmm_usage[XMM0], value);
             } else {
-                xmm = claim_register(function, &code_section->data, xmm, value);
+                xmm = claim_register(emitter, &code_section->data, xmm, value);
             }
 
             // copy the float bytes into the data section
@@ -591,7 +771,7 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
     } else if (value->type == VALUE_BASIC_BLOCK) {
         Basic_Block *block = static_cast<Basic_Block *>(value);
 
-        Register *reg = get_free_or_suggested_register(function, &code_section->data, suggested_register, force_use_suggested, nullptr);
+        Register *reg = get_free_or_suggested_register(emitter, suggested_register, force_use_suggested, nullptr);
         reg->is_free = false;
 
         s32 *value = lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
@@ -605,18 +785,18 @@ u8 emit_load_of_value(Linker_Object *object, Function *function, Section *code_s
         auto _alloca = static_cast<Instruction_Alloca *>(value);
 
         if (_alloca->result_stored_in) return _alloca->result_stored_in->machine_reg;
-        if (_alloca->result_spilled_onto_stack != 0) return load_instruction_result(function, &code_section->data, _alloca, suggested_register, force_use_suggested);
+        if (_alloca->result_spilled_onto_stack != 0) return load_instruction_result(emitter, _alloca, suggested_register, force_use_suggested);
 
-        Register *reg = get_free_or_suggested_register(function, &code_section->data, suggested_register, force_use_suggested, _alloca);
+        Register *reg = get_free_or_suggested_register(emitter, suggested_register, force_use_suggested, _alloca);
 
         assert(_alloca->stack_offset != 0);
         lea_into_reg64(&code_section->data, reg->machine_reg, addr_register_disp(RBP, _alloca->stack_offset));
         return reg->machine_reg;
     } else if (value->type == VALUE_ARGUMENT) {
-        return load_instruction_result(function, &code_section->data, value, suggested_register, force_use_suggested);
+        return load_instruction_result(emitter, value, suggested_register, force_use_suggested);
     } else if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) {
         auto inst = static_cast<Instruction *>(value);
-        return load_instruction_result(function, &code_section->data, inst, suggested_register, force_use_suggested);
+        return load_instruction_result(emitter, inst, suggested_register, force_use_suggested);
     }
 
     assert(false);
@@ -631,7 +811,7 @@ u8 maybe_get_instruction_register(Value *value) {
     return 0xFF;
 }
 
-Address_Info get_address_value_of_pointer(Linker_Object *object, Function *function, Section *code_section, Section *data_section, Value *value, u8 suggested_register = RAX) {
+Address_Info get_address_value_of_pointer(X64_Emitter *emitter, Linker_Object *object, Section *code_section, Value *value, u8 suggested_register = RAX) {
     assert(value->value_type->type == Type::POINTER);
 
     if (value->type == INSTRUCTION_ALLOCA) {
@@ -654,16 +834,16 @@ Address_Info get_address_value_of_pointer(Linker_Object *object, Function *funct
         if (size > 8) {
             // we cant claim ownership of the index register so the result of this calculation
             // would be nontrivial, just get the stored instruction result
-            u8 machine_reg = emit_load_of_value(object, function, code_section, data_section, value, suggested_register);
+            u8 machine_reg = emit_load_of_value(emitter, object, code_section, value, suggested_register);
             return addr_register_disp(machine_reg);
         }
 
         u8 target = maybe_get_instruction_register(gep->index);
 
-        Address_Info source = get_address_value_of_pointer(object, function, code_section, data_section, gep->pointer_value, (target == RAX) ? RCX : RAX);
+        Address_Info source = get_address_value_of_pointer(emitter, object, code_section, gep->pointer_value, (target == RAX) ? RCX : RAX);
         // gep->pointer_value->uses--;
 
-        if (target == 0xFF) target = emit_load_of_value(object, function, code_section, data_section, gep->index,         (source.machine_reg == RAX) ? RCX : RAX);
+        if (target == 0xFF) target = emit_load_of_value(emitter, object, code_section, gep->index,         (source.machine_reg == RAX) ? RCX : RAX);
         // gep->index->uses--;
 
         assert(source.machine_reg != target);
@@ -680,18 +860,18 @@ Address_Info get_address_value_of_pointer(Linker_Object *object, Function *funct
 #endif
 
     else {
-        u8 machine_reg = emit_load_of_value(object, function, code_section, data_section, value, suggested_register);
+        u8 machine_reg = emit_load_of_value(emitter, object, code_section, value, suggested_register);
         return addr_register_disp(machine_reg);
     }
 }
 
-u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *current_block, Section *code_section, Section *data_section, Instruction *inst) {
+u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *function, Basic_Block *current_block, Section *code_section, Instruction *inst) {
     inst->emitted = true;
     switch (inst->type) {
         case INSTRUCTION_ALLOCA: {
             auto _alloca = static_cast<Instruction_Alloca *>(inst);
 
-            // Register *reg = get_free_or_suggested_register(function, &code_section->data, RAX, false, inst);
+            // Register *reg = get_free_or_suggested_register(emitter, RAX, false, inst);
 
             assert(_alloca->stack_offset != 0);
             // lea_into_reg64(&code_section->data, reg->machine_reg, addr_register_disp(RBP, -_alloca->stack_offset));
@@ -701,7 +881,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
         case INSTRUCTION_STORE: {
             auto store = static_cast<Instruction_Store *>(inst);
 
-            Address_Info target_info = get_address_value_of_pointer(object, function, code_section, data_section, store->store_target, RAX);
+            Address_Info target_info = get_address_value_of_pointer(emitter, object, code_section, store->store_target, RAX);
 
             Constant *constant = is_constant(store->source_value);
             if (constant && constant->is_integer()) {
@@ -709,7 +889,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 move_imm32_sext_to_memory(&code_section->data, value, target_info, store->store_target->value_type->pointer_to->size);
             } else {
                 u8 source = maybe_get_instruction_register(store->source_value);
-                if (source == 0xFF) source = emit_load_of_value(object, function, code_section, data_section, store->source_value, (target_info.machine_reg == RAX) ? RCX : RAX);
+                if (source == 0xFF) source = emit_load_of_value(emitter, object, code_section, store->source_value, (target_info.machine_reg == RAX) ? RCX : RAX);
 
                 assert(target_info.machine_reg != source);
                 move_register_value_to_memory(&code_section->data, source, target_info, store->store_target->value_type->pointer_to);
@@ -723,13 +903,13 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
         case INSTRUCTION_LOAD: {
             auto load = static_cast<Instruction_Load *>(inst);
 
-            Address_Info source = get_address_value_of_pointer(object, function, code_section, data_section, load->pointer_value);
+            Address_Info source = get_address_value_of_pointer(emitter, object, code_section, load->pointer_value);
 
             u8 target_reg = source.machine_reg;
             if (target_reg == RBP || target_reg == RSP) target_reg = RAX;
 
             load->pointer_value->uses--;
-             Register *reg = get_free_or_suggested_register(function, &code_section->data, RAX, false, inst);
+             Register *reg = get_free_or_suggested_register(emitter, RAX, false, inst);
 
             move_memory_value_to_register(&code_section->data, reg->machine_reg, source, load->value_type);
             return reg->machine_reg;
@@ -740,15 +920,15 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             u8 target = maybe_get_instruction_register(gep->index);
 
-            Address_Info source = get_address_value_of_pointer(object, function, code_section, data_section, gep->pointer_value, (target == RAX) ? RCX : RAX);
+            Address_Info source = get_address_value_of_pointer(emitter, object, code_section, gep->pointer_value, (target == RAX) ? RCX : RAX);
             gep->pointer_value->uses--;
 
-            if (target == 0xFF) target = emit_load_of_value(object, function, code_section, data_section, gep->index,         (source.machine_reg == RAX) ? RCX : RAX);
+            if (target == 0xFF) target = emit_load_of_value(emitter, object, code_section, gep->index,         (source.machine_reg == RAX) ? RCX : RAX);
             gep->index->uses--;
 
             assert(source.machine_reg != target);
 
-            Register *reg = claim_register(function, &code_section->data, &function->register_usage[target], inst);
+            Register *reg = claim_register(emitter, &code_section->data, &emitter->register_usage[target], inst);
 
             u32 size = gep->pointer_value->value_type->pointer_to->size;
 
@@ -776,25 +956,25 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             u8 lhs_reg = maybe_get_instruction_register(div->lhs);
             u8 rhs_reg = maybe_get_instruction_register(div->rhs);
 
-            if (lhs_reg == 0xFF) lhs_reg = emit_load_of_value(object, function, code_section, data_section, div->lhs, RAX, true);
+            if (lhs_reg == 0xFF) lhs_reg = emit_load_of_value(emitter, object, code_section, div->lhs, RAX, true);
             div->lhs->uses--;
 
             // Result always in RAX
-            claim_register(function, &code_section->data, &function->register_usage[RAX], inst);
+            claim_register(emitter, &code_section->data, &emitter->register_usage[RAX], inst);
 
             if (lhs_reg != RAX) {
                 move_reg64_to_reg64(&code_section->data, lhs_reg, RAX);
                 lhs_reg = RAX;
             }
 
-            if (rhs_reg == 0xFF) rhs_reg = emit_load_of_value(object, function, code_section, data_section, div->rhs, RCX);
+            if (rhs_reg == 0xFF) rhs_reg = emit_load_of_value(emitter, object, code_section, div->rhs, RCX);
             div->rhs->uses--;
 
             assert(rhs_reg != RAX);
             assert(rhs_reg != RDX);
 
             if (div->value_type->size >= 2) {
-                maybe_spill_register(function, &code_section->data, &function->register_usage[RDX]);
+                maybe_spill_register(emitter, &emitter->register_usage[RDX]);
                 if   (div->signed_division) cwd_cdq(&code_section->data, div->value_type->size);
                 else                        xor_reg64_to_reg64(&code_section->data, RDX, RDX, 8);
             } else {
@@ -813,12 +993,12 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             u8 lhs_reg = maybe_get_instruction_register(add->lhs);
             u8 rhs_reg = maybe_get_instruction_register(add->rhs);
 
-            if (lhs_reg == 0xFF) lhs_reg = emit_load_of_value(object, function, code_section, data_section, add->lhs, (rhs_reg == RAX) ? RCX : RAX);
+            if (lhs_reg == 0xFF) lhs_reg = emit_load_of_value(emitter, object, code_section, add->lhs, (rhs_reg == RAX) ? RCX : RAX);
             add->lhs->uses--;
 
             Constant *constant = is_constant(add->rhs);
             if (constant && constant->is_integer()) {
-                claim_register(function, &code_section->data, &function->register_usage[lhs_reg], inst);
+                claim_register(emitter, &code_section->data, &emitter->register_usage[lhs_reg], inst);
                 s64 value = static_cast<s64>(constant->integer_value);
 
                 if      (inst->type == INSTRUCTION_ADD) add_imm32_to_reg64   (&code_section->data, lhs_reg, trunc<s32>(value), add->value_type->size);
@@ -827,10 +1007,10 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 return 0;
             }
 
-            if (rhs_reg == 0xFF) rhs_reg = emit_load_of_value(object, function, code_section, data_section, add->rhs, (lhs_reg == RAX) ? RCX : RAX);
+            if (rhs_reg == 0xFF) rhs_reg = emit_load_of_value(emitter, object, code_section, add->rhs, (lhs_reg == RAX) ? RCX : RAX);
             add->rhs->uses--;
 
-            claim_register(function, &code_section->data, &function->register_usage[lhs_reg], inst);
+            claim_register(emitter, &code_section->data, &emitter->register_usage[lhs_reg], inst);
 
             if      (inst->type == INSTRUCTION_ADD) add_reg64_to_reg64   (&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
             else if (inst->type == INSTRUCTION_SUB) sub_reg64_from_reg64 (&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
@@ -861,27 +1041,27 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
 
             if (object->target.is_win32()) {
                 // shadow space for the callee to spill registers...
-                function->largest_call_stack_adjustment += 32;
+                emitter->largest_call_stack_adjustment += 32;
             }
 
             // Spill all argument passing registers to preserve
             // their values in case the callee wishes to use them
-            for (auto machine_reg : function->parameter_registers) {
-                maybe_spill_register(function, &code_section->data, &function->register_usage[machine_reg]);
+            for (auto machine_reg : emitter->parameter_registers) {
+                maybe_spill_register(emitter, &emitter->register_usage[machine_reg]);
             }
 
-            for (auto &reg : function->xmm_usage) {
-                maybe_spill_register(function, &code_section->data, &reg);
+            for (auto &reg : emitter->xmm_usage) {
+                maybe_spill_register(emitter, &reg);
             }
 
             u8 num_float_params    = 0;
             u8 integer_param_index = 0;
             u8 float_param_index   = 0;
 
-            assert(call->parameters.size() <= function->parameter_registers.size()); // @Incomplete
+            assert(call->parameters.size() <= emitter->parameter_registers.size()); // @Incomplete
             for (u32 i = 0; i < call->parameters.size(); ++i) {
                 auto p = call->parameters[i];
-                u8 param_reg = function->parameter_registers[integer_param_index];
+                u8 param_reg = emitter->parameter_registers[integer_param_index];
                 u8 int_param_reg = param_reg;
 
                 bool is_float = (p->value_type->type == Type::FLOAT);
@@ -893,20 +1073,20 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                         param_reg = float_param_index;
                         float_param_index += 1;
                     } else if (object->target.is_win32()) {
-                        function->register_usage[param_reg].is_free = false;
+                        emitter->register_usage[param_reg].is_free = false;
 
                         param_reg = integer_param_index;
                         integer_param_index += 1;
                     }
 
-                    maybe_spill_register(function, &code_section->data, &function->xmm_usage[param_reg]);
-                    function->xmm_usage[param_reg].is_free = false;
+                    maybe_spill_register(emitter, &emitter->xmm_usage[param_reg]);
+                    emitter->xmm_usage[param_reg].is_free = false;
                 } else {
                     integer_param_index += 1;
-                    function->register_usage[param_reg].is_free = false;
+                    emitter->register_usage[param_reg].is_free = false;
                 }
 
-                u8 result = emit_load_of_value(object, function, code_section, data_section, p, int_param_reg, true);
+                u8 result = emit_load_of_value(emitter, object, code_section, p, int_param_reg, true);
 
                 if (result != param_reg) {
                     if (is_float)
@@ -924,9 +1104,9 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             }
 
             // Spill RAX
-            maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
+            maybe_spill_register(emitter, &emitter->register_usage[RAX]);
             if (call->value_type->type != Type::VOID)
-                claim_register(function, &code_section->data, &function->register_usage[RAX], inst);
+                claim_register(emitter, &code_section->data, &emitter->register_usage[RAX], inst);
 
             if (object->target.is_system_v()) {
                 // load number of floating point parameters into %al
@@ -934,7 +1114,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             }
 
             if (object->use_absolute_addressing) {
-                maybe_spill_register(function, &code_section->data, &function->register_usage[RBX]);
+                maybe_spill_register(emitter, &emitter->register_usage[RBX]);
 
                 // @Cutnpaste move_imm64_to_reg64
                 move_imm64_to_reg64(&code_section->data, 0, RBX);
@@ -976,12 +1156,12 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             Instruction_Return *ret = static_cast<Instruction_Return *>(inst);
 
             s32 *stack_size_target = add_imm32_to_reg64(&code_section->data, RSP, 0, 8);
-            function->stack_size_fixups.push_back(stack_size_target);
+            emitter->stack_size_fixups.push_back(stack_size_target);
 
             if (ret->return_value) {
                 u8 lhs_reg = maybe_get_instruction_register(ret->return_value);
 
-                if (lhs_reg == 0xFF) lhs_reg = emit_load_of_value(object, function, code_section, data_section, ret->return_value, RAX, true);
+                if (lhs_reg == 0xFF) lhs_reg = emit_load_of_value(emitter, object, code_section, ret->return_value, RAX, true);
                 ret->return_value->uses--;
 
                 if (lhs_reg != RAX) move_reg64_to_reg64(&code_section->data, lhs_reg, RAX);
@@ -1006,17 +1186,17 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
             // Spill all scratch registers at branches in case that we branch
             // to much earlier code that expects all registers to be free.
             // This may not totally be correct, but works for now. -josh 7 August 2020
-            for (auto &reg : function->register_usage) {
+            for (auto &reg : emitter->register_usage) {
                 if (reg.machine_reg == RSP || reg.machine_reg == RBP) continue;
 
-                maybe_spill_register(function, &code_section->data, &reg);
+                maybe_spill_register(emitter, &reg);
             }
 
             if (branch->condition) {
-                u8 cond = emit_load_of_value(object, function, code_section, data_section, branch->condition);
+                u8 cond = emit_load_of_value(emitter, object, code_section, branch->condition);
                 sub_imm32_from_reg64(&code_section->data, cond, 0, branch->condition->value_type->size);
 
-                maybe_spill_register(function, &code_section->data, &function->register_usage[RAX]);
+                maybe_spill_register(emitter, &emitter->register_usage[RAX]);
                 
                 code_section->data.append_byte(0x0F);
                 code_section->data.append_byte(0x85); // jne if cond if true goto true block
@@ -1039,7 +1219,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                 } else {
                     *jne_disp = 3; // skip the next jmp instruction
 
-                    u8 fail_target = emit_load_of_value(object, function, code_section, data_section, branch->failure_target);
+                    u8 fail_target = emit_load_of_value(emitter, object, code_section, branch->failure_target);
                     code_section->data.append_byte(REX(1, 0, 0, 0));
                     code_section->data.append_byte(0xFF); // jmp reg
                     code_section->data.append_byte(ModRM(0b11, 4, fail_target & 0b0111));
@@ -1068,7 +1248,7 @@ u8 emit_instruction(Linker_Object *object, Function *function, Basic_Block *curr
                     u32 *value = code_section->data.allocate_unaligned<u32>();
                     block->text_ptrs_for_fixup.push_back(value);
                 } else {
-                    u8 target = emit_load_of_value(object, function, code_section, data_section, branch->true_target);
+                    u8 target = emit_load_of_value(emitter, object, code_section, branch->true_target);
 
                     code_section->data.append_byte(REX(1, 0, 0, 0));
                     code_section->data.append_byte(0xFF); // jmp reg
@@ -1105,6 +1285,17 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
         return;
     }
 
+    X64_Emitter emitter;
+    emitter.code_section = code_section;
+    emitter.data_section = data_section;
+    emitter.register_usage.clear();
+    emitter.xmm_usage.clear();
+    emitter.parameter_registers.clear();
+    emitter.stack_size_fixups.clear();
+    emitter.stack_size = 0;
+    emitter.largest_call_stack_adjustment = 0;
+
+
     u32 symbol_index = get_symbol_index(object, function);
     Symbol *sym = &object->symbol_table[symbol_index];
     sym->is_function = true;
@@ -1115,32 +1306,32 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
     sym->section_offset = code_section->data.size();
 
     if (object->target.is_win32()) {
-        function->parameter_registers.push_back(RCX);
-        function->parameter_registers.push_back(RDX);
-        function->parameter_registers.push_back(R8);
-        function->parameter_registers.push_back(R9);
+        emitter.parameter_registers.push_back(RCX);
+        emitter.parameter_registers.push_back(RDX);
+        emitter.parameter_registers.push_back(R8);
+        emitter.parameter_registers.push_back(R9);
     } else {
-        function->parameter_registers.push_back(RDI);
-        function->parameter_registers.push_back(RSI);
-        function->parameter_registers.push_back(RDX);
-        function->parameter_registers.push_back(RCX);
-        function->parameter_registers.push_back(R8);
-        function->parameter_registers.push_back(R9);
+        emitter.parameter_registers.push_back(RDI);
+        emitter.parameter_registers.push_back(RSI);
+        emitter.parameter_registers.push_back(RDX);
+        emitter.parameter_registers.push_back(RCX);
+        emitter.parameter_registers.push_back(R8);
+        emitter.parameter_registers.push_back(R9);
     }
 
-    function->register_usage.push_back(make_reg(RAX));
-    function->register_usage.push_back(make_reg(RCX));
-    function->register_usage.push_back(make_reg(RDX));
-    function->register_usage.push_back(make_reg(RBX));
-    function->register_usage.push_back(make_reg(RSP, false));
-    function->register_usage.push_back(make_reg(RBP, false));
-    function->register_usage.push_back(make_reg(RSI));
-    function->register_usage.push_back(make_reg(RDI));
-    function->register_usage.push_back(make_reg(R8));
-    function->register_usage.push_back(make_reg(R9));
+    emitter.register_usage.push_back(make_reg(RAX));
+    emitter.register_usage.push_back(make_reg(RCX));
+    emitter.register_usage.push_back(make_reg(RDX));
+    emitter.register_usage.push_back(make_reg(RBX));
+    emitter.register_usage.push_back(make_reg(RSP, false));
+    emitter.register_usage.push_back(make_reg(RBP, false));
+    emitter.register_usage.push_back(make_reg(RSI));
+    emitter.register_usage.push_back(make_reg(RDI));
+    emitter.register_usage.push_back(make_reg(R8));
+    emitter.register_usage.push_back(make_reg(R9));
 
     for (u8 i = 0; i <= XMM15; ++i) {
-        function->xmm_usage.push_back(make_reg(i));
+        emitter.xmm_usage.push_back(make_reg(i));
     }
 
     // :WastefulPushPops: @Cleanup pushing all the registers we may need is
@@ -1159,7 +1350,7 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
 
     for (u32 i = 0; i < function->arguments.size(); ++i) {
         Argument *arg = function->arguments[i];
-        claim_register(function, &code_section->data, &function->register_usage[function->parameter_registers[i]], arg);
+        claim_register(&emitter, &code_section->data, &emitter.register_usage[emitter.parameter_registers[i]], arg);
     }
 
     for (auto block : function->blocks) {
@@ -1167,23 +1358,23 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
             if (inst->type == INSTRUCTION_ALLOCA) {
                 auto _alloca = static_cast<Instruction_Alloca *>(inst);
 
-                function->stack_size += (_alloca->alloca_type->size * _alloca->array_size);
-                if ((function->stack_size % 8)) function->stack_size += 8 - (function->stack_size % 8);
+                emitter.stack_size += (_alloca->alloca_type->size * _alloca->array_size);
+                if ((emitter.stack_size % 8)) emitter.stack_size += 8 - (emitter.stack_size % 8);
 
-                _alloca->stack_offset = -function->stack_size;
+                _alloca->stack_offset = -emitter.stack_size;
             }
         }
     }
 
 
     s32 *stack_size_target = sub_imm32_from_reg64(&code_section->data, RSP, 0, 8);
-    function->stack_size_fixups.push_back(stack_size_target);
+    emitter.stack_size_fixups.push_back(stack_size_target);
 
     // Touch stack pages from top to bottom
     // to release stack pages from the page guard system.
     if (object->target.is_win32()) {
         s32 *move_stack_size_to_rax = (s32 *)move_imm64_to_reg64(&code_section->data, 0, RAX, 4); // 4-byte immediate
-        function->stack_size_fixups.push_back(move_stack_size_to_rax);
+        emitter.stack_size_fixups.push_back(move_stack_size_to_rax);
 
         auto loop_start = code_section->data.size();
         sub_imm32_from_reg64(&code_section->data, RAX, 4096, 8);
@@ -1213,7 +1404,7 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
         block->text_location = code_section->data.size();
 
         for (auto inst : block->instructions) {
-            emit_instruction(object, function, block, code_section, data_section, inst);
+            emit_instruction(&emitter, object, function, block, code_section, inst);
         }
     }
 
@@ -1226,16 +1417,16 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
         }
     }
 
-    function->stack_size += function->largest_call_stack_adjustment;
+    emitter.stack_size += emitter.largest_call_stack_adjustment;
     // Ensure stack is 16-byte aligned.
-    function->stack_size = ensure_aligned(function->stack_size, 16);
-    assert((function->stack_size & (15)) == 0);
-    function->stack_size += 8;
+    emitter.stack_size = ensure_aligned(emitter.stack_size, 16);
+    assert((emitter.stack_size & (15)) == 0);
+    emitter.stack_size += 8;
 
 
-    assert(function->stack_size >= 0);
-    for (auto fixup : function->stack_size_fixups) {
-        *fixup = function->stack_size;
+    assert(emitter.stack_size >= 0);
+    for (auto fixup : emitter.stack_size_fixups) {
+        *fixup = emitter.stack_size;
     }
 }
 
