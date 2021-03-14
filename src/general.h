@@ -11,6 +11,7 @@
 #include <initializer_list>
 #include <string_view>
 #include <vector>
+#include <unordered_map>
 
 #include <stdio.h>
 
@@ -20,6 +21,9 @@ using String = std::string_view;
 
 template <typename T>
 using Array = std::vector<T>;
+
+template <typename K, typename V>
+using Map = std::unordered_map<K, V>;
 
 typedef uint64_t u64;
 typedef uint32_t u32;
@@ -110,8 +114,10 @@ struct Data_Buffer {
         new_chunk();
     }
 
-    Chunk *new_chunk(size_t size = 4096) {
-        if (size < 4096) size = 4096;
+    const static size_t DEFAULT_CHUNK_SIZE = 4096 * 256; // 1MB
+
+    Chunk *new_chunk(size_t size = DEFAULT_CHUNK_SIZE) {
+        if (size < DEFAULT_CHUNK_SIZE) size = DEFAULT_CHUNK_SIZE;
         Chunk c;
         c.data     = (u8 *)malloc(size);
         c.count    = 0;
