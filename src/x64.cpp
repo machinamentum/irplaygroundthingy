@@ -1,103 +1,11 @@
 #include "general.h"
 #include "linker_object.h"
 #include "ir.h"
+#include "x64.h"
 
 using namespace josh;
 
 #include <stdio.h>
-
-namespace josh {
-
-typedef u64 String_ID;
-const static String_ID STRING_ID_EMPTY = 0;
-
-struct String_Table
-{
-    Bump_Allocator<> string_storage;
-
-    struct String_Entry
-    {
-        const char *s = nullptr;
-        size_t data_sec_offset = 0;
-    };
-
-    struct Bucket
-    {
-        Array<u64>    keys;
-        Array<String_Entry> values;
-    };
-
-    Bucket *buckets;
-    size_t _size = 0;
-
-    static const size_t NUM_BUCKETS = 0x1000;
-    static const size_t DEFAULT_BUCKET_SIZE = 0x1000;
-
-    String_Table()
-    {
-        buckets = reinterpret_cast<Bucket *>(malloc(sizeof(Bucket) * NUM_BUCKETS));
-
-        for (size_t i = 0; i < NUM_BUCKETS; ++i)
-            new (buckets + i) Bucket();
-    }
-
-    static u32 hash(const String &s)
-    {
-        const char *data = s.data();
-        u32 v = 5381;
-        for (size_t i = 0; i < s.length(); ++i)
-        {
-            v = v * 33 ^ data[i];
-        }
-        return v;
-    }
-
-    String_Entry *intern(const String &str)
-    {
-        if (str.length() == 0)
-            return nullptr;
-
-        u64 key = hash(str);
-        u64 bucket = key & (NUM_BUCKETS-1);
-        Bucket &b = buckets[bucket];
-
-        // TODO I think this could likely be faster by using a dense-hash-set/grouping comparison strategy using SIMD
-        for (size_t i = 0; i < b.keys.size(); ++i)
-        {
-            u64 k = b.keys[i];
-            if (k == key && b.values[i].s == str)
-                return &b.values[i];
-        }
-
-        b.keys.push_back(key);
-        b.values.push_back(String_Entry{string_storage.append_string(str), U32_MAX});
-        _size += 1;
-        return &b.values[b.values.size()-1];
-    }
-};
-
-} // namespace josh
-
-struct X64_Emitter
-{
-    josh::String_Table string_table;
-
-    Section *data_section;
-    Section *code_section;
-
-    // For code gen
-    Array<Register> register_usage;
-    Array<Register> xmm_usage;
-
-    // @Temporary this information is the same across all functions,
-    // we should put these in Target or something...
-    Array<u8>       parameter_registers;
-
-
-    Array<s32 *>    stack_size_fixups;
-    s32 stack_size = 0;
-    s32 largest_call_stack_adjustment = 0;
-};
 
 
 enum Integer_Register : u8
@@ -133,18 +41,6 @@ enum XMM_Register : u8
     XMM14 = 14,
     XMM15 = 15,
 };
-
-template <typename T, typename B>
-bool fits_into(B b) {
-    T a = (T)b;
-    return ((B)a) == b;
-}
-
-template<typename T, typename B>
-T trunc(B value) {
-    assert((fits_into<T, B>(value)));
-    return static_cast<T>(value);
-}
 
 struct Address_Info {
     u8 machine_reg = 0xFF;
@@ -608,7 +504,7 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
                     data_section->data.append_byte(0);
                     entry->data_sec_offset = data_sec_offset;
                 } else {
-                    data_sec_offset = entry->data_sec_offset;
+                    data_sec_offset = trunc<u32>(entry->data_sec_offset);
                 }
             } else {
                 // Empty string, assume at data section offset 0.
@@ -1208,7 +1104,7 @@ Register make_reg(u8 machine_reg, bool is_free = true) {
 
 namespace josh {
 
-void x64_emit_function(Linker_Object *object, Section *code_section, Section *data_section, Function *function) {
+void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *function) {
     if (function->intrinsic_id) return;
     if (function->uses == 0 && (function->blocks.size() == 0)) {
         // Function isn't used and is externally defined so we don't need
@@ -1216,15 +1112,14 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
         return;
     }
 
-    X64_Emitter emitter;
-    emitter.code_section = code_section;
-    emitter.data_section = data_section;
-    emitter.register_usage.clear();
-    emitter.xmm_usage.clear();
-    emitter.parameter_registers.clear();
-    emitter.stack_size_fixups.clear();
-    emitter.stack_size = 0;
-    emitter.largest_call_stack_adjustment = 0;
+    Section *code_section = emitter->code_section;
+
+    emitter->register_usage.clear();
+    emitter->xmm_usage.clear();
+    emitter->parameter_registers.clear();
+    emitter->stack_size_fixups.clear();
+    emitter->stack_size = 0;
+    emitter->largest_call_stack_adjustment = 0;
 
 
     u32 symbol_index = get_symbol_index(object, function);
@@ -1237,32 +1132,32 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
     sym->section_offset = code_section->data.size();
 
     if (object->target.is_win32()) {
-        emitter.parameter_registers.push_back(RCX);
-        emitter.parameter_registers.push_back(RDX);
-        emitter.parameter_registers.push_back(R8);
-        emitter.parameter_registers.push_back(R9);
+        emitter->parameter_registers.push_back(RCX);
+        emitter->parameter_registers.push_back(RDX);
+        emitter->parameter_registers.push_back(R8);
+        emitter->parameter_registers.push_back(R9);
     } else {
-        emitter.parameter_registers.push_back(RDI);
-        emitter.parameter_registers.push_back(RSI);
-        emitter.parameter_registers.push_back(RDX);
-        emitter.parameter_registers.push_back(RCX);
-        emitter.parameter_registers.push_back(R8);
-        emitter.parameter_registers.push_back(R9);
+        emitter->parameter_registers.push_back(RDI);
+        emitter->parameter_registers.push_back(RSI);
+        emitter->parameter_registers.push_back(RDX);
+        emitter->parameter_registers.push_back(RCX);
+        emitter->parameter_registers.push_back(R8);
+        emitter->parameter_registers.push_back(R9);
     }
 
-    emitter.register_usage.push_back(make_reg(RAX));
-    emitter.register_usage.push_back(make_reg(RCX));
-    emitter.register_usage.push_back(make_reg(RDX));
-    emitter.register_usage.push_back(make_reg(RBX));
-    emitter.register_usage.push_back(make_reg(RSP, false));
-    emitter.register_usage.push_back(make_reg(RBP, false));
-    emitter.register_usage.push_back(make_reg(RSI));
-    emitter.register_usage.push_back(make_reg(RDI));
-    emitter.register_usage.push_back(make_reg(R8));
-    emitter.register_usage.push_back(make_reg(R9));
+    emitter->register_usage.push_back(make_reg(RAX));
+    emitter->register_usage.push_back(make_reg(RCX));
+    emitter->register_usage.push_back(make_reg(RDX));
+    emitter->register_usage.push_back(make_reg(RBX));
+    emitter->register_usage.push_back(make_reg(RSP, false));
+    emitter->register_usage.push_back(make_reg(RBP, false));
+    emitter->register_usage.push_back(make_reg(RSI));
+    emitter->register_usage.push_back(make_reg(RDI));
+    emitter->register_usage.push_back(make_reg(R8));
+    emitter->register_usage.push_back(make_reg(R9));
 
     for (u8 i = 0; i <= XMM15; ++i) {
-        emitter.xmm_usage.push_back(make_reg(i));
+        emitter->xmm_usage.push_back(make_reg(i));
     }
 
     // :WastefulPushPops: @Cleanup pushing all the registers we may need is
@@ -1281,7 +1176,7 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
 
     for (u32 i = 0; i < function->arguments.size(); ++i) {
         Argument *arg = function->arguments[i];
-        claim_register(&emitter, &emitter.register_usage[emitter.parameter_registers[i]], arg);
+        claim_register(emitter, &emitter->register_usage[emitter->parameter_registers[i]], arg);
     }
 
     for (auto block : function->blocks) {
@@ -1289,23 +1184,23 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
             if (inst->type == INSTRUCTION_ALLOCA) {
                 auto _alloca = static_cast<Instruction_Alloca *>(inst);
 
-                emitter.stack_size += (_alloca->alloca_type->size * _alloca->array_size);
-                if ((emitter.stack_size % 8)) emitter.stack_size += 8 - (emitter.stack_size % 8);
+                emitter->stack_size += (_alloca->alloca_type->size * _alloca->array_size);
+                if ((emitter->stack_size % 8)) emitter->stack_size += 8 - (emitter->stack_size % 8);
 
-                _alloca->stack_offset = -emitter.stack_size;
+                _alloca->stack_offset = -emitter->stack_size;
             }
         }
     }
 
 
     s32 *stack_size_target = sub_imm32_from_reg64(&code_section->data, RSP, 0, 8);
-    emitter.stack_size_fixups.push_back(stack_size_target);
+    emitter->stack_size_fixups.push_back(stack_size_target);
 
     // Touch stack pages from top to bottom
     // to release stack pages from the page guard system.
     if (object->target.is_win32()) {
         s32 *move_stack_size_to_rax = (s32 *)move_imm64_to_reg64(&code_section->data, 0, RAX, 4); // 4-byte immediate
-        emitter.stack_size_fixups.push_back(move_stack_size_to_rax);
+        emitter->stack_size_fixups.push_back(move_stack_size_to_rax);
 
         auto loop_start = code_section->data.size();
         sub_imm32_from_reg64(&code_section->data, RAX, 4096, 8);
@@ -1335,7 +1230,7 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
         block->text_location = code_section->data.size();
 
         for (auto inst : block->instructions) {
-            emit_instruction(&emitter, object, function, block, code_section, inst);
+            emit_instruction(emitter, object, function, block, code_section, inst);
         }
     }
 
@@ -1348,16 +1243,16 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
         }
     }
 
-    emitter.stack_size += emitter.largest_call_stack_adjustment;
+    emitter->stack_size += emitter->largest_call_stack_adjustment;
     // Ensure stack is 16-byte aligned.
-    emitter.stack_size = ensure_aligned(emitter.stack_size, 16);
-    assert((emitter.stack_size & (15)) == 0);
-    emitter.stack_size += 8;
+    emitter->stack_size = ensure_aligned(emitter->stack_size, 16);
+    assert((emitter->stack_size & (15)) == 0);
+    emitter->stack_size += 8;
 
 
-    assert(emitter.stack_size >= 0);
-    for (auto fixup : emitter.stack_size_fixups) {
-        *fixup = emitter.stack_size;
+    assert(emitter->stack_size >= 0);
+    for (auto fixup : emitter->stack_size_fixups) {
+        *fixup = emitter->stack_size;
     }
 }
 

@@ -151,20 +151,20 @@ void emit_macho_file(Linker_Object *object) {
     symtab_cmd->cmd     = LC_SYMTAB;
     symtab_cmd->cmdsize = sizeof(symtab_command);
     // symtab_cmd->symoff = ;
-    symtab_cmd->nsyms = object->symbol_table.size();
+    symtab_cmd->nsyms = trunc<u32>(object->symbol_table.size());
     // symtab_cmd->stroff  = ;
     // symtab_cmd->strsize = ;
 
     auto segment_cmd = buffer.allocate_unaligned<segment_command_64>();
     segment_cmd->cmd     = LC_SEGMENT_64;
-    segment_cmd->cmdsize = sizeof(segment_command_64) + sizeof(section_64)*object->sections.size();
+    segment_cmd->cmdsize = sizeof(segment_command_64) + sizeof(section_64)*trunc<u32>(object->sections.size());
     memset(segment_cmd->segname, 0, 16);
     // memcpy(segment_cmd->segname, "__TEXT", 6);
 
     segment_cmd->vmaddr = 0;
     segment_cmd->maxprot  = 0;
     segment_cmd->initprot = 0;
-    segment_cmd->nsects   = object->sections.size();
+    segment_cmd->nsects   = trunc<u32>(object->sections.size());
     segment_cmd->flags = 0;
 
     for (auto &sect : object->sections) {
@@ -177,7 +177,7 @@ void emit_macho_file(Linker_Object *object) {
         memcpy(section->segname,  sect.segment.data(), sect.segment.length());
         section->size = sect.data.size();
         section->align = 0; // @TOOD
-        section->nreloc = sect.relocations.size();
+        section->nreloc = trunc<u32>(sect.relocations.size());
         section->flags = 0;
 
         if (sect.is_pure_instructions) section->flags |= S_ATTR_PURE_INSTRUCTIONS | 0x400;
@@ -204,7 +204,7 @@ void emit_macho_file(Linker_Object *object) {
         addr += section->size;
 
         section->reloff = buffer.size();
-        section->nreloc = sect.relocations.size();
+        section->nreloc = trunc<u32>(sect.relocations.size());
 
         for (auto &reloc : sect.relocations) {
             relocation_info *info = buffer.allocate_unaligned<relocation_info>();

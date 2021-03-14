@@ -62,14 +62,14 @@ typedef int16_t  s16;
 typedef int8_t   s8;
 
 template <typename T, typename B>
-bool fits_into(B b) {
+bool _fits_into(B b) {
     T a = (T)b;
     return ((B)a) == b;
 }
 
 template<typename T, typename B>
-T trunc(B value) {
-    assert((fits_into<T, B>(value)));
+T _trunc(B value) {
+    assert((_fits_into<T, B>(value)));
     return static_cast<T>(value);
 }
 
@@ -419,7 +419,7 @@ struct Parser {
 
     Token peek_token(u32 offset = 0) {
         u32 index = token_cursor + offset;
-        if (index >= (tokens.size()-1)) index = trunc<u32>(tokens.size()-1);
+        if (index >= (tokens.size()-1)) index = _trunc<u32>(tokens.size()-1);
         return tokens[index];
     }
 

@@ -66,7 +66,7 @@ struct Section {
     String name;
     String segment;
     Data_Buffer data;
-    u8 section_number;
+    u8 section_number = 0;
     u32 symbol_index = 0;
 
     Array<Relocation> relocations;
@@ -75,8 +75,6 @@ struct Section {
 
     // format specific
     void *mach_section = nullptr;
-
-    Section() { }
 };
 
 struct Symbol {

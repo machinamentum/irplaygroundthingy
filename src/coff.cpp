@@ -89,7 +89,7 @@ void emit_coff_file(Linker_Object *object) {
     header->NumberOfSections     = static_cast<u16>(object->sections.size());
     header->TimeDateStamp        = 0; // @TODO
     // header->PointerToSymbolTable = ;
-    header->NumberOfSymbols      = object->symbol_table.size();
+    header->NumberOfSymbols      = trunc<u32>(object->symbol_table.size());
     header->SizeOfOptionalHeader = 0;
     header->Characteristics      = 0;
 
@@ -138,7 +138,7 @@ void emit_coff_file(Linker_Object *object) {
         if (section->Characteristics & IMAGE_SCN_LNK_NRELOC_OVFL) {
             PE_Coff_Relocation *info = (PE_Coff_Relocation *)buffer.allocate_bytes_unaligned(PE_COFF_RELOCATION_SIZE);
 
-            info->VirtualAddress   = sect.relocations.size();
+            info->VirtualAddress   = trunc<u32>(sect.relocations.size());
             info->SymbolTableIndex = 0;
             info->Type             = 0;
         }

@@ -39,6 +39,18 @@ const u8  U8_MAX  = 0xFF;
 const u16 U16_MAX = 0xFFFF;
 const u32 U32_MAX = 0xFFFFFFFF;
 
+template <typename T, typename B>
+bool fits_into(B b) {
+    T a = (T)b;
+    return ((B)a) == b;
+}
+
+template<typename T, typename B>
+T trunc(B value) {
+    assert((fits_into<T, B>(value)));
+    return static_cast<T>(value);
+}
+
 template <typename T>
 struct Array_Slice {
     bool list_initialized = false;
@@ -104,30 +116,41 @@ T ensure_aligned(T value, T alignment) {
 template <size_t DEFAULT_CHUNK_SIZE = 8192>
 struct Bump_Allocator {
     struct Chunk {
-        char *data      = nullptr;
+        char *data       = nullptr;
         size_t count     = 0;
         size_t reserved  = 0;
+
+        ~Chunk() {
+            free(data);
+        }
     };
 
     Array<Chunk> chunks;
 
-    Bump_Allocator() {
-        new_chunk();
-    }
-
     Chunk *new_chunk(size_t size = DEFAULT_CHUNK_SIZE) {
         if (size < DEFAULT_CHUNK_SIZE) size = DEFAULT_CHUNK_SIZE;
-        Chunk c;
-        c.data     = (char *)malloc(size);
-        c.count    = 0;
-        c.reserved = size;
 
-        chunks.push_back(c);
+        chunks.resize(chunks.size()+1);
+
+        Chunk *c = &chunks.back();
+
+        c->data     = (char *)malloc(size);
+        c->count    = 0;
+        c->reserved = size;
+
+        return c;
+    }
+
+    Chunk *get_chunk()
+    {
+        if (chunks.size() == 0)
+            new_chunk();
+
         return &chunks[chunks.size()-1];
     }
 
     char *append(const void *src, size_t size) {
-        Chunk *c = &chunks[chunks.size()-1];
+        Chunk *c = get_chunk();
         if (c->count+size >= c->reserved) c = new_chunk(size);
 
         char *out = c->data+c->count;
@@ -141,7 +164,7 @@ struct Bump_Allocator {
     }
 
     void *allocate_bytes_unaligned(size_t size) {
-        Chunk *c = &chunks[chunks.size()-1];
+        Chunk *c = get_chunk();
         if (c->count+size >= c->reserved) c = new_chunk(size);
 
         void *result = c->data+c->count;
@@ -158,7 +181,7 @@ struct Bump_Allocator {
     T *allocate() {
         size_t align = alignof(T);
 
-        Chunk *c = &chunks[chunks.size()-1];
+        Chunk *c = get_chunk();
         auto count = ensure_aligned(c->count, align);
         if (count+sizeof(T) >= c->reserved) c = new_chunk(sizeof(T));
 
@@ -188,6 +211,74 @@ struct Bump_Allocator {
 };
 
 using Data_Buffer = Bump_Allocator<1024 * 1024>; // 1MB
+
+typedef u64 String_ID;
+const static String_ID STRING_ID_EMPTY = 0;
+
+struct String_Table
+{
+    Bump_Allocator<> string_storage;
+
+    struct String_Entry
+    {
+        const char *s = nullptr;
+        size_t data_sec_offset = 0;
+    };
+
+    struct Bucket
+    {
+        Array<u64>    keys;
+        Array<String_Entry> values;
+    };
+
+    Bucket *buckets;
+    size_t _size = 0;
+
+    static const size_t NUM_BUCKETS = 0x1000;
+    static const size_t DEFAULT_BUCKET_SIZE = 0x1000;
+
+    String_Table()
+    {
+        buckets = reinterpret_cast<Bucket *>(malloc(sizeof(Bucket) * NUM_BUCKETS));
+
+        for (size_t i = 0; i < NUM_BUCKETS; ++i)
+            new (buckets + i) Bucket();
+    }
+
+    static u32 hash(const String &s)
+    {
+        const char *data = s.data();
+        u32 v = 5381;
+        for (size_t i = 0; i < s.length(); ++i)
+        {
+            v = v * 33 ^ static_cast<u32>(data[i]);
+        }
+        return v;
+    }
+
+    String_Entry *intern(const String &str)
+    {
+        if (str.length() == 0)
+            return nullptr;
+
+        u64 key = hash(str);
+        u64 bucket = key & (NUM_BUCKETS-1);
+        Bucket &b = buckets[bucket];
+
+        // TODO I think this could likely be faster by using a dense-hash-set/grouping comparison strategy using SIMD
+        for (size_t i = 0; i < b.keys.size(); ++i)
+        {
+            u64 k = b.keys[i];
+            if (k == key && b.values[i].s == str)
+                return &b.values[i];
+        }
+
+        b.keys.push_back(key);
+        b.values.push_back(String_Entry{string_storage.append_string(str), U32_MAX});
+        _size += 1;
+        return &b.values[b.values.size()-1];
+    }
+};
 
 } // namespace josh
 

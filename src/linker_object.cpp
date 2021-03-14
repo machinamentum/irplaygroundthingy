@@ -1,5 +1,6 @@
 #include "linker_object.h"
 #include "ir.h"
+#include "x64.h"
 
 using namespace josh;
 
@@ -32,7 +33,7 @@ DLL_Handle josh::dll_open(const char *path) {
     return LoadLibraryA(path);
 }
 
-void *dll_find_symbol(DLL_Handle handle, const char *name) {
+void *josh::dll_find_symbol(DLL_Handle handle, const char *name) {
     return GetProcAddress(handle, name);
 }
 
@@ -53,7 +54,6 @@ u32 get_symbol_index(Linker_Object *object, Global_Value *value) {
     return value->symbol_index;
 }
 
-void x64_emit_function(Linker_Object *object, Section *code_section, Section *data_section, Function *function);
 // void AArch64_emit_function(Linker_Object *object, Section *code_section, Section *data_section, Function *function);
 
 void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *text_index, u32 *data_index) {
@@ -61,7 +61,8 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
     u32 text_sec_index = 0;
 
     {
-        Section data_sec = {};
+        object->sections.resize(object->sections.size()+1);
+        Section &data_sec = object->sections.back();
 
         if (object->target.is_macOS()) {
             data_sec.name    = "__data";
@@ -69,7 +70,7 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
         } else {
             data_sec.name = ".data";
         }
-        data_sec.section_number = static_cast<u8>(object->sections.size()+1);
+        data_sec.section_number = static_cast<u8>(object->sections.size());
         data_sec.symbol_index = static_cast<u32>(object->symbol_table.size());
         data_sec.is_writable = true;
 
@@ -84,12 +85,11 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
         object->symbol_table.push_back(sym);
 
         data_sec_index = data_sec.section_number-1;
-
-        object->sections.push_back(data_sec);
     }
 
     {
-        Section text_sec = {};
+        object->sections.resize(object->sections.size()+1);
+        Section &text_sec = object->sections.back();
 
         if (object->target.is_macOS()) {
             text_sec.name    = "__text";
@@ -97,7 +97,7 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
         } else {
             text_sec.name = ".text";
         }
-        text_sec.section_number = static_cast<u8>(object->sections.size()+1);
+        text_sec.section_number = static_cast<u8>(object->sections.size());
         text_sec.symbol_index = static_cast<u32>(object->symbol_table.size());
         text_sec.is_pure_instructions = true;
 
@@ -112,18 +112,18 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
         object->symbol_table.push_back(sym);
 
         text_sec_index = text_sec.section_number-1;
-
-        object->sections.push_back(text_sec);
     }
 
     // Always start data section with a null byte to provide a consistent location for empty strings.
     object->sections[data_sec_index].data.append_byte(0);
 
-    for (auto func : unit->functions) {
-        if (object->target.is_x64())
-            x64_emit_function(object, &object->sections[text_sec_index], &object->sections[data_sec_index], func);
-        // else if (object->target.is_aarch64())
-        //     AArch64_emit_function(object, &object->sections[text_sec_index], &object->sections[data_sec_index], func);
+    if (object->target.is_x64()) {
+        X64_Emitter emitter;
+        emitter.code_section = &object->sections[text_sec_index];
+        emitter.data_section = &object->sections[data_sec_index];
+
+        for (auto func : unit->functions)
+            x64_emit_function(&emitter, object, func);
     }
 
     assert(object->symbol_table.size() <= U32_MAX);
