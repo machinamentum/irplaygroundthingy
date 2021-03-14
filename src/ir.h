@@ -12,6 +12,15 @@ struct Function;
 struct Instruction;
 struct Basic_Block;
 
+struct IR_Context {
+    Bump_Allocator<> node_storage;
+
+    template <typename T>
+    T *new_node() {
+        return node_storage.allocate<T>();
+    }
+};
+
 enum {
     VALUE_CONSTANT,
     VALUE_GLOBAL,
@@ -186,8 +195,8 @@ struct Constant : Value {
 };
 
 inline
-Constant *make_string_constant(const String &value) {
-    Constant *con = new Constant();
+Constant *make_string_constant(IR_Context *context, const String &value) {
+    Constant *con = context->new_node<Constant>();
     con->constant_type = Constant::STRING;
     char *buffer = (char *)malloc(value.length()); // @Leak
     memcpy(buffer, value.data(), value.length());
@@ -197,8 +206,8 @@ Constant *make_string_constant(const String &value) {
 }
 
 inline
-Constant *make_integer_constant(u64 value, Type *value_type = make_integer_type(8)) {
-    Constant *con = new Constant();
+Constant *make_integer_constant(IR_Context *context, u64 value, Type *value_type = make_integer_type(8)) {
+    Constant *con = context->new_node<Constant>();
     con->constant_type = Constant::INTEGER;
     con->integer_value = value;
     con->value_type = value_type;
@@ -208,8 +217,8 @@ Constant *make_integer_constant(u64 value, Type *value_type = make_integer_type(
 }
 
 inline
-Constant *make_float_constant(double value, Type *value_type = make_float_type(8)) {
-    Constant *con = new Constant();
+Constant *make_float_constant(IR_Context *context, double value, Type *value_type = make_float_type(8)) {
+    Constant *con = context->new_node<Constant>();
     con->constant_type = Constant::FLOAT;
     con->float_value = value;
     con->value_type = value_type;
@@ -219,8 +228,8 @@ Constant *make_float_constant(double value, Type *value_type = make_float_type(8
 }
 
 inline
-Constant *make_pointer_constant(u64 value, Type *value_type) {
-    Constant *con = new Constant();
+Constant *make_pointer_constant(IR_Context *context, u64 value, Type *value_type) {
+    Constant *con = context->new_node<Constant>();
     con->constant_type = Constant::INTEGER;
     con->integer_value = value;
     con->value_type = value_type;
@@ -370,15 +379,15 @@ struct Compilation_Unit {
 };
 
 inline
-Argument *make_arg(Type *type) {
-    Argument *arg = new Argument();
+Argument *make_arg(IR_Context *context, Type *type) {
+    Argument *arg = context->new_node<Argument>();
     arg->value_type = type;
     return arg;
 }
 
 inline
-Instruction_Branch *make_branch(Value *condition_or_null, Value *true_target, Value *failure_target = nullptr) {
-    Instruction_Branch *branch = new Instruction_Branch();
+Instruction_Branch *make_branch(IR_Context *context, Value *condition_or_null, Value *true_target, Value *failure_target = nullptr) {
+    Instruction_Branch *branch = context->new_node<Instruction_Branch>();
     branch->condition      = condition_or_null;
     branch->true_target    = true_target;
     branch->failure_target = failure_target;
@@ -390,8 +399,8 @@ Instruction_Branch *make_branch(Value *condition_or_null, Value *true_target, Va
 }
 
 inline
-Instruction_GEP *make_gep(Value *pointer_value, Value *index) {
-    Instruction_GEP *gep = new Instruction_GEP();
+Instruction_GEP *make_gep(IR_Context *context, Value *pointer_value, Value *index) {
+    Instruction_GEP *gep = context->new_node<Instruction_GEP>();
     gep->pointer_value = pointer_value;
     gep->index         = index;
     gep->value_type = pointer_value->value_type;
@@ -402,11 +411,11 @@ Instruction_GEP *make_gep(Value *pointer_value, Value *index) {
 }
 
 inline
-Instruction_Add *make_add(Value *lhs, Value *rhs) {
+Instruction_Add *make_add(IR_Context *context, Value *lhs, Value *rhs) {
     assert(types_match(lhs->value_type, rhs->value_type));
     assert(lhs->value_type->is_integer_type());
 
-    Instruction_Add *add = new Instruction_Add();
+    Instruction_Add *add = context->new_node<Instruction_Add>();
     add->value_type = lhs->value_type;
     add->lhs = lhs;
     add->rhs = rhs;
@@ -418,11 +427,11 @@ Instruction_Add *make_add(Value *lhs, Value *rhs) {
 }
 
 inline
-Instruction_Sub *make_sub(Value *lhs, Value *rhs) {
+Instruction_Sub *make_sub(IR_Context *context, Value *lhs, Value *rhs) {
     assert(types_match(lhs->value_type, rhs->value_type));
     assert(lhs->value_type->is_integer_type());
 
-    Instruction_Sub *sub = new Instruction_Sub();
+    Instruction_Sub *sub = context->new_node<Instruction_Sub>();
     sub->value_type = lhs->value_type;
     sub->lhs = lhs;
     sub->rhs = rhs;
@@ -434,11 +443,11 @@ Instruction_Sub *make_sub(Value *lhs, Value *rhs) {
 }
 
 inline
-Instruction_Mul *make_mul(Value *lhs, Value *rhs) {
+Instruction_Mul *make_mul(IR_Context *context, Value *lhs, Value *rhs) {
     assert(types_match(lhs->value_type, rhs->value_type));
     assert(lhs->value_type->is_integer_type());
 
-    Instruction_Mul *sub = new Instruction_Mul();
+    Instruction_Mul *sub = context->new_node<Instruction_Mul>();
     sub->value_type = lhs->value_type;
     sub->lhs = lhs;
     sub->rhs = rhs;
@@ -450,11 +459,11 @@ Instruction_Mul *make_mul(Value *lhs, Value *rhs) {
 }
 
 inline
-Instruction_Div *make_div(Value *lhs, Value *rhs, bool signed_division) {
+Instruction_Div *make_div(IR_Context *context, Value *lhs, Value *rhs, bool signed_division) {
     assert(types_match(lhs->value_type, rhs->value_type));
     assert(lhs->value_type->is_integer_type());
 
-    Instruction_Div *div = new Instruction_Div();
+    Instruction_Div *div = context->new_node<Instruction_Div>();
     div->value_type = lhs->value_type;
     div->lhs = lhs;
     div->rhs = rhs;
@@ -468,9 +477,9 @@ Instruction_Div *make_div(Value *lhs, Value *rhs, bool signed_division) {
 
 
 inline
-Instruction_Load *make_load(Value *pointer_value) {
+Instruction_Load *make_load(IR_Context *context, Value *pointer_value) {
     assert(pointer_value->value_type->type == Type::POINTER);
-    Instruction_Load *load = new Instruction_Load();
+    Instruction_Load *load = context->new_node<Instruction_Load>();
     load->pointer_value = pointer_value;
     load->value_type    = pointer_value->value_type->pointer_to;
 
@@ -479,10 +488,10 @@ Instruction_Load *make_load(Value *pointer_value) {
 }
 
 inline
-Instruction_Store *make_store(Value *source_value, Value *store_target) {
+Instruction_Store *make_store(IR_Context *context, Value *source_value, Value *store_target) {
     assert(store_target->value_type->type == Type::POINTER);
 
-    Instruction_Store *store = new Instruction_Store();
+    Instruction_Store *store = context->new_node<Instruction_Store>();
     store->source_value = source_value;
     store->store_target = store_target;
 
@@ -492,8 +501,8 @@ Instruction_Store *make_store(Value *source_value, Value *store_target) {
 }
 
 inline
-Instruction_Alloca *make_alloca(Type *alloca_type, u32 array_size = 1) {
-    Instruction_Alloca *_alloca = new Instruction_Alloca();
+Instruction_Alloca *make_alloca(IR_Context *context, Type *alloca_type, u32 array_size = 1) {
+    Instruction_Alloca *_alloca = context->new_node<Instruction_Alloca>();
     _alloca->alloca_type = alloca_type;
     _alloca->value_type = make_pointer_type(alloca_type);
     _alloca->array_size = array_size;
@@ -501,9 +510,9 @@ Instruction_Alloca *make_alloca(Type *alloca_type, u32 array_size = 1) {
 }
 
 inline
-Instruction_Call *make_call(Value *target, const Array_Slice<Value *> &parameters = Array_Slice<Value *>()) {
+Instruction_Call *make_call(IR_Context *context, Value *target, const Array_Slice<Value *> &parameters = Array_Slice<Value *>()) {
     assert(target->value_type && target->value_type->type == Type::FUNCTION);
-    Instruction_Call *call = new Instruction_Call();
+    Instruction_Call *call = context->new_node<Instruction_Call>();
     call->call_target = target;
     call->value_type = target->value_type->function.result_type;
     target->uses++;
@@ -534,8 +543,8 @@ Instruction_Call *make_call(Value *target, const Array_Slice<Value *> &parameter
 }
 
 inline
-Instruction_Return *make_return(Value *retval = nullptr) {
-    Instruction_Return *ret = new Instruction_Return();
+Instruction_Return *make_return(IR_Context *context, Value *retval = nullptr) {
+    Instruction_Return *ret = context->new_node<Instruction_Return>();
     ret->return_value = retval;
     if (retval) retval->uses++;
     return ret;
@@ -560,8 +569,10 @@ struct IR_Manager {
     Type *i64;
 
     Basic_Block *block = nullptr;
+    IR_Context *context = nullptr;
 
-    IR_Manager() {
+    IR_Manager(IR_Context *_context) {
+        context = _context;
         i8  = make_integer_type(1);
         i16 = make_integer_type(2);
         i32 = make_integer_type(4);
@@ -573,49 +584,49 @@ struct IR_Manager {
     }
 
     Instruction_Alloca *insert_alloca(Type *alloca_type, u32 array_size = 1) {
-        auto _alloca = make_alloca(alloca_type, array_size);
+        auto _alloca = make_alloca(context, alloca_type, array_size);
         block->insert(_alloca);
         return _alloca;
     }
 
     Instruction_Load *insert_load(Value *pointer_value) {
-        auto load = make_load(pointer_value);
+        auto load = make_load(context, pointer_value);
         block->insert(load);
         return load;
     }
 
     Instruction_Store *insert_store(Value *source_value, Value *store_target) {
-        auto store = make_store(source_value, store_target);
+        auto store = make_store(context, source_value, store_target);
         block->insert(store);
         return store;
     }
 
     Instruction_Add *insert_add(Value *lhs, Value *rhs) {
-        auto add = make_add(lhs, rhs);
+        auto add = make_add(context, lhs, rhs);
         block->insert(add);
         return add;
     }
 
     Instruction_Sub *insert_sub(Value *lhs, Value *rhs) {
-        auto sub = make_sub(lhs, rhs);
+        auto sub = make_sub(context, lhs, rhs);
         block->insert(sub);
         return sub;
     }
 
     Instruction_Mul *insert_mul(Value *lhs, Value *rhs) {
-        auto mul = make_mul(lhs, rhs);
+        auto mul = make_mul(context, lhs, rhs);
         block->insert(mul);
         return mul;
     }
 
     Instruction_Div *insert_div(Value *lhs, Value *rhs, bool signed_division) {
-        auto div = make_div(lhs, rhs, signed_division);
+        auto div = make_div(context, lhs, rhs, signed_division);
         block->insert(div);
         return div;
     }
 
     Instruction_Branch *insert_branch(Value *condition_or_null, Value *true_target, Value *failure_target = nullptr) {
-        auto br = make_branch(condition_or_null, true_target, failure_target);
+        auto br = make_branch(context, condition_or_null, true_target, failure_target);
         block->insert(br);
         return br;
     }
@@ -625,19 +636,19 @@ struct IR_Manager {
     }
 
     Instruction_Call *insert_call(Function *func, const Array_Slice<Value *> &parameters = Array_Slice<Value *>()) {
-        auto call = make_call(func, parameters);
+        auto call = make_call(context, func, parameters);
         block->insert(call);
         return call;
     }
 
     Instruction_Return *insert_return(Value *retval = nullptr) {
-        auto ret = make_return(retval);
+        auto ret = make_return(context, retval);
         block->insert(ret);
         return ret;
     }
 
     Instruction_GEP *insert_gep(Value *pointer_value, Value *index) {
-        auto gep = make_gep(pointer_value, index);
+        auto gep = make_gep(context, pointer_value, index);
         block->insert(gep);
         return gep;
     }

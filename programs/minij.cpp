@@ -749,6 +749,8 @@ struct Parser {
 
 struct IR_Man : IR_Manager {
     Function *debugbreak = nullptr;
+
+    IR_Man(IR_Context *context) : IR_Manager(context) {}
 };
 
 void emit_scope(AST::Scope *scope, AST::Function *function, Compilation_Unit *unit, Function *irfunc, IR_Man *irm);
@@ -759,14 +761,14 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
             auto lit = static_cast<AST::Literal *>(expr);
 
             switch (lit->literal_type) {
-                case AST::Literal::STRING : return make_string_constant (lit->string_value);
+                case AST::Literal::STRING : return make_string_constant(irm->context, lit->string_value);
                 case AST::Literal::INTEGER: {
                     if (type_for_literal && type_for_literal->type == Type::POINTER) {
-                        return make_pointer_constant(lit->integer_value, type_for_literal);
+                        return make_pointer_constant(irm->context, lit->integer_value, type_for_literal);
                     }
-                    return make_integer_constant(lit->integer_value, type_for_literal ? type_for_literal : make_integer_type(8));
+                    return make_integer_constant(irm->context, lit->integer_value, type_for_literal ? type_for_literal : make_integer_type(8));
                 }
-                case AST::Literal::FLOAT  : return make_float_constant  (lit->float_value,   type_for_literal ? type_for_literal : lit->expr_type);
+                case AST::Literal::FLOAT  : return make_float_constant(irm->context, lit->float_value, type_for_literal ? type_for_literal : lit->expr_type);
             }
             assert(false);
             return nullptr;
@@ -1048,7 +1050,8 @@ int main(int argc, char **argv) {
     Compilation_Unit unit;
     unit.target = get_host_target();
 
-    IR_Man *irm = new IR_Man();
+    IR_Context context;
+    IR_Man *irm = new IR_Man(&context);
     Function *debugbreak = new Function();
     debugbreak->intrinsic_id = Function::DEBUG_BREAK;
     debugbreak->value_type = make_func_type(make_void_type());
@@ -1063,7 +1066,7 @@ int main(int argc, char **argv) {
 
         std::vector<Type *> arg_types;
         for (auto var : function->arguments) {
-            Argument *arg = make_arg(var->expr_type);
+            Argument *arg = make_arg(irm->context, var->expr_type);
             var->storage = arg;
             func->arguments.push_back(arg);
             arg_types.push_back(var->expr_type);

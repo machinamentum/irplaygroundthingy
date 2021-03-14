@@ -29,15 +29,16 @@ void old_test() {
     Basic_Block *block = new Basic_Block();
     main_func->insert(block);
 
-    IR_Manager *irm = new IR_Manager();
+    IR_Context context;
+    IR_Manager *irm = new IR_Manager(&context);
     irm->set_block(block);
 
     auto _alloca = irm->insert_alloca(irm->i64);
-    irm->insert_store(make_integer_constant(10), _alloca);
+    irm->insert_store(make_integer_constant(&context, 10), _alloca);
 
     {
         auto load = irm->insert_load(_alloca);
-        auto mul = irm->insert_mul(load, make_integer_constant(2, irm->i64));
+        auto mul = irm->insert_mul(load, make_integer_constant(&context, 2, irm->i64));
         irm->insert_store(mul, _alloca);
     }
 
@@ -56,13 +57,13 @@ void old_test() {
         irm->set_block(loop_header);
 
         auto load = irm->insert_load(_alloca);
-        auto sub = irm->insert_sub(load, make_integer_constant(1, irm->i64));
+        auto sub = irm->insert_sub(load, make_integer_constant(&context, 1, irm->i64));
         irm->insert_store(sub, _alloca);
         irm->insert_branch(load, loop_body, loop_exit);
 
         irm->set_block(loop_body);
 
-        irm->insert_call(printf_func, {make_string_constant("Hello World: %d\n"), load});
+        irm->insert_call(printf_func, {make_string_constant(&context, "Hello World: %d\n"), load});
 
         // irm->insert_call(debugbreak);
 

@@ -16,14 +16,16 @@ struct BF_Gen : IR_Manager {
     Value *data_buffer_alloca;
     Value *index_alloca;
     char *bf_program = nullptr;
+
+    BF_Gen(IR_Context *context) : IR_Manager(context) {}
 };
 
 void gen_bf_instruction(Function *function, BF_Gen *bfg) {
     Instruction *load = bfg->insert_load(bfg->index_alloca);
     auto gep = bfg->insert_gep(bfg->data_buffer_alloca, load);
 
-    Constant *constant_one_index = make_integer_constant(1, load->value_type);
-    Constant *constant_one = make_integer_constant(1, bfg->data_buffer_alloca->value_type->pointer_to);
+    Constant *constant_one_index = make_integer_constant(bfg->context, 1, load->value_type);
+    Constant *constant_one = make_integer_constant(bfg->context, 1, bfg->data_buffer_alloca->value_type->pointer_to);
 
     while (*bfg->bf_program) {
         char c = *bfg->bf_program;
@@ -172,6 +174,8 @@ int main(int argc, char **argv) {
 
     bf_program = get_file_contents(filename);
 
+    IR_Context context;
+
     Compilation_Unit unit;
     unit.target = get_host_target();
 
@@ -198,7 +202,7 @@ int main(int argc, char **argv) {
     Basic_Block *block = new Basic_Block();
     main_func->insert(block);
 
-    BF_Gen *bfg = new BF_Gen();
+    BF_Gen *bfg = new BF_Gen(&context);
     bfg->bf_program = bf_program;
     bfg->putchar_func = putchar_func;
     bfg->getchar_func = getchar_func;
@@ -207,12 +211,12 @@ int main(int argc, char **argv) {
     Instruction_Alloca *data_buffer_alloca = bfg->insert_alloca(make_integer_type(cell_size), 30000);
     bfg->data_buffer_alloca = data_buffer_alloca;
 
-    bfg->insert_call(memset_func, {data_buffer_alloca, make_integer_constant(0), make_integer_constant(30000 * data_buffer_alloca->value_type->pointer_to->size)});
+    bfg->insert_call(memset_func, {data_buffer_alloca, make_integer_constant(bfg->context, 0), make_integer_constant(bfg->context, 30000 * data_buffer_alloca->value_type->pointer_to->size)});
 
     Instruction_Alloca *index_alloca = bfg->insert_alloca(make_integer_type(8), 1);
     bfg->index_alloca = index_alloca;
 
-    bfg->insert_store(make_integer_constant(512, make_integer_type(data_buffer_alloca->value_type->pointer_to->size)), index_alloca);
+    bfg->insert_store(make_integer_constant(bfg->context, 512, make_integer_type(data_buffer_alloca->value_type->pointer_to->size)), index_alloca);
 
     gen_bf_instruction(main_func, bfg);
 

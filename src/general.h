@@ -119,11 +119,14 @@ struct Bump_Allocator {
         char *data       = nullptr;
         size_t count     = 0;
         size_t reserved  = 0;
-
-        ~Chunk() {
-            free(data);
-        }
     };
+
+    ~Bump_Allocator() {
+        for (auto &c : chunks)
+            free(c.data);
+
+        chunks.clear();
+    }
 
     Array<Chunk> chunks;
 
@@ -144,7 +147,7 @@ struct Bump_Allocator {
     Chunk *get_chunk()
     {
         if (chunks.size() == 0)
-            new_chunk();
+            return new_chunk();
 
         return &chunks[chunks.size()-1];
     }
@@ -188,7 +191,9 @@ struct Bump_Allocator {
         c->count = ensure_aligned(c->count, align);
         void *result = c->data+c->count;
         c->count += sizeof(T);
-        return (T *)result;
+
+
+        return new (result) T();
     }
 
     void append(Bump_Allocator<DEFAULT_CHUNK_SIZE> *other) {
