@@ -6,6 +6,7 @@ using namespace josh;
 
 #include <stdio.h>
 
+namespace josh {
 
 struct Bump_Allocator
 {
@@ -92,10 +93,16 @@ struct String_Table
 {
     Bump_Allocator string_storage;
 
+    struct String_Entry
+    {
+        const char *s = nullptr;
+        size_t data_sec_offset = 0;
+    };
+
     struct Bucket
     {
         Array<u64>    keys;
-        Array<const char *> values;
+        Array<String_Entry> values;
     };
 
     Bucket *buckets;
@@ -123,10 +130,10 @@ struct String_Table
         return v;
     }
 
-    String_ID intern(const String &str)
+    String_Entry *intern(const String &str)
     {
         if (str.length() == 0)
-            return STRING_ID_EMPTY;
+            return nullptr;
 
         u64 key = hash(str);
         u64 bucket = key & (NUM_BUCKETS-1);
@@ -136,24 +143,24 @@ struct String_Table
         for (size_t i = 0; i < b.keys.size(); ++i)
         {
             u64 k = b.keys[i];
-            if (k == key && b.values[i] == str)
-                return String_ID{(i << 32) | (key & 0xFFFFFFFF)};
+            if (k == key && b.values[i].s == str)
+                return &b.values[i];
         }
 
         b.keys.push_back(key);
-        b.values.push_back(string_storage.append_string(str));
+        b.values.push_back(String_Entry{string_storage.append_string(str), U32_MAX});
         _size += 1;
-        return ((b.keys.size()-1) << 32) | (key & 0xFFFFFFFF);
+        return &b.values[b.values.size()-1];
     }
 
-    String lookup(const String_ID id)
-    {
-        const Bucket &b = buckets[id % NUM_BUCKETS];
-        u64 idx = id >> 32;
-        assert(b.keys.size() > idx && "Key is not an interned string.");
+    // String_Entry *lookup(const String_ID id)
+    // {
+    //     const Bucket &b = buckets[id % NUM_BUCKETS];
+    //     u64 idx = id >> 32;
+    //     assert(b.keys.size() > idx && "Key is not an interned string.");
 
-        return b.values[idx];
-    }
+    //     return &b.values[idx];
+    // }
 
     size_t size()
     {
@@ -161,9 +168,11 @@ struct String_Table
     }
 };
 
+} // namespace josh
+
 struct X64_Emitter
 {
-    String_Table string_table;
+    josh::String_Table string_table;
 
     Section *data_section;
     Section *code_section;
@@ -579,7 +588,7 @@ Register *get_free_xmm_register(X64_Emitter *emitter) {
     return nullptr;
 }
 
-Register *claim_register(X64_Emitter *emitter, Data_Buffer *dataptr, Register *reg, Value *claimer) {
+Register *claim_register(X64_Emitter *emitter, Register *reg, Value *claimer) {
     void maybe_spill_register(X64_Emitter *emitter, Register *reg);
     maybe_spill_register(emitter, reg);
 
@@ -641,10 +650,9 @@ Register *get_free_or_suggested_register(X64_Emitter *emitter, u8 suggested_regi
     }
 
     if (!reg) reg = &emitter->register_usage[suggested_register];
-    
-    Data_Buffer *dataptr = &emitter->code_section->data;
+
     maybe_spill_register(emitter, reg);
-    if (inst) return claim_register(emitter, dataptr, reg, inst);
+    if (inst) return claim_register(emitter, reg, inst);
 
     
     return reg;
@@ -679,11 +687,21 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
 
             // copy the string characters into the data section
             assert(constant->string_value.length() <= U32_MAX);
-            size_t length = static_cast<u32>(constant->string_value.length());
-            void *data_target = data_section->data.allocate_bytes_unaligned(length);
-            memcpy(data_target, constant->string_value.data(), length);
-            data_section->data.append_byte(0);
 
+            if (auto entry = emitter->string_table.intern(constant->string_value)) {
+                if (entry->data_sec_offset == U32_MAX) { // New entry
+                    size_t length = static_cast<u32>(constant->string_value.length());
+                    void *data_target = data_section->data.allocate_bytes_unaligned(length);
+                    memcpy(data_target, constant->string_value.data(), length);
+                    data_section->data.append_byte(0);
+                    entry->data_sec_offset = data_sec_offset;
+                } else {
+                    data_sec_offset = entry->data_sec_offset;
+                }
+            } else {
+                // Empty string, assume at data section offset 0.
+                data_sec_offset = 0;
+            }
 
             if (object->use_absolute_addressing) {
                 move_imm64_to_reg64(&code_section->data, data_sec_offset, reg->machine_reg, 8);
@@ -717,9 +735,9 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
         } else if (constant->constant_type == Constant::FLOAT) {
             Register *xmm = get_free_xmm_register(emitter);
             if (!xmm) {
-                xmm = claim_register(emitter, &code_section->data, &emitter->xmm_usage[XMM0], value);
+                xmm = claim_register(emitter, &emitter->xmm_usage[XMM0], value);
             } else {
-                xmm = claim_register(emitter, &code_section->data, xmm, value);
+                xmm = claim_register(emitter, xmm, value);
             }
 
             // copy the float bytes into the data section
@@ -928,7 +946,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
             assert(source.machine_reg != target);
 
-            Register *reg = claim_register(emitter, &code_section->data, &emitter->register_usage[target], inst);
+            Register *reg = claim_register(emitter, &emitter->register_usage[target], inst);
 
             u32 size = gep->pointer_value->value_type->pointer_to->size;
 
@@ -960,7 +978,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
             div->lhs->uses--;
 
             // Result always in RAX
-            claim_register(emitter, &code_section->data, &emitter->register_usage[RAX], inst);
+            claim_register(emitter, &emitter->register_usage[RAX], inst);
 
             if (lhs_reg != RAX) {
                 move_reg64_to_reg64(&code_section->data, lhs_reg, RAX);
@@ -998,7 +1016,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
             Constant *constant = is_constant(add->rhs);
             if (constant && constant->is_integer()) {
-                claim_register(emitter, &code_section->data, &emitter->register_usage[lhs_reg], inst);
+                claim_register(emitter, &emitter->register_usage[lhs_reg], inst);
                 s64 value = static_cast<s64>(constant->integer_value);
 
                 if      (inst->type == INSTRUCTION_ADD) add_imm32_to_reg64   (&code_section->data, lhs_reg, trunc<s32>(value), add->value_type->size);
@@ -1010,7 +1028,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
             if (rhs_reg == 0xFF) rhs_reg = emit_load_of_value(emitter, object, code_section, add->rhs, (lhs_reg == RAX) ? RCX : RAX);
             add->rhs->uses--;
 
-            claim_register(emitter, &code_section->data, &emitter->register_usage[lhs_reg], inst);
+            claim_register(emitter, &emitter->register_usage[lhs_reg], inst);
 
             if      (inst->type == INSTRUCTION_ADD) add_reg64_to_reg64   (&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
             else if (inst->type == INSTRUCTION_SUB) sub_reg64_from_reg64 (&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
@@ -1106,7 +1124,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
             // Spill RAX
             maybe_spill_register(emitter, &emitter->register_usage[RAX]);
             if (call->value_type->type != Type::VOID)
-                claim_register(emitter, &code_section->data, &emitter->register_usage[RAX], inst);
+                claim_register(emitter, &emitter->register_usage[RAX], inst);
 
             if (object->target.is_system_v()) {
                 // load number of floating point parameters into %al
@@ -1350,7 +1368,7 @@ void x64_emit_function(Linker_Object *object, Section *code_section, Section *da
 
     for (u32 i = 0; i < function->arguments.size(); ++i) {
         Argument *arg = function->arguments[i];
-        claim_register(&emitter, &code_section->data, &emitter.register_usage[emitter.parameter_registers[i]], arg);
+        claim_register(&emitter, &emitter.register_usage[emitter.parameter_registers[i]], arg);
     }
 
     for (auto block : function->blocks) {

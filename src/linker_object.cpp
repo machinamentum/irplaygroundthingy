@@ -116,6 +116,9 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
         object->sections.push_back(text_sec);
     }
 
+    // Always start data section with a null byte to provide a consistent location for empty strings.
+    object->sections[data_sec_index].data.append_byte(0);
+
     for (auto func : unit->functions) {
         if (object->target.is_x64())
             x64_emit_function(object, &object->sections[text_sec_index], &object->sections[data_sec_index], func);
@@ -130,6 +133,7 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
     if (data_index) *data_index = data_sec_index;
 
     printf("Number of .text bytes: %d\n", object->sections[text_sec_index].data.size());
+    printf("Number of .data bytes: %d\n", object->sections[data_sec_index].data.size());
 }
 
 void emit_obj_file(Compilation_Unit *unit) {
