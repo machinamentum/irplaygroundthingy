@@ -799,17 +799,18 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
             if (!use_constant_disp) {
                 info.machine_reg = RSP; // SIB
-                info.disp        = source.disp + gep->offset;
+                info.disp        = source.disp + gep->offset + constant_disp;
                 info.base_reg    = source.machine_reg;
                 info.index_reg   = target;
                 info.scale       = (u8) size;
             } else {
                 info.machine_reg = source.machine_reg;
-                info.disp        = (source.disp + gep->offset) * size;
+                info.disp        = (source.disp + gep->offset + constant_disp) * size;
                 info.scale       = 1;
             }
 
             if   (source.disp) lea_into_reg64(&code_section->data, reg->machine_reg, info);
+            // FIXME this no longer works if gep->offset is nonzero
             else               add_reg64_to_reg64(&code_section->data, source.machine_reg, reg->machine_reg, gep->value_type->size);
 
             return 0;
