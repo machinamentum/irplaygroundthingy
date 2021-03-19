@@ -52,6 +52,7 @@ struct Type {
         FLOAT,
         POINTER,
         FUNCTION,
+        STRUCT,
     } type;
 
     u32 size;
@@ -93,6 +94,62 @@ struct Function_Type : Type {
     Type *result_type;
     bool is_varargs;
 };
+
+struct Struct_Type : Type {
+    static const Type::_Type TYPE = STRUCT;
+    Struct_Type() { type = TYPE; }
+
+    Array<Type *> members;
+    // TODO packedness
+    // bool packed = false;
+
+    u32 offset_of(size_t index) {
+        assert(index < members.size());
+
+        size_t offset_within_struct = 0;
+        for (size_t i = 0; i < index; ++i) {
+            auto m = members[i];
+
+             if (offset_within_struct % m->alignment)
+                offset_within_struct += m->alignment - (offset_within_struct % m->alignment);
+
+            offset_within_struct += m->size;
+        }
+
+        Type *mem = members[index];
+
+        if (offset_within_struct % mem->alignment)
+             offset_within_struct += mem->alignment - (offset_within_struct % mem->alignment);
+
+        return offset_within_struct;
+    }
+};
+
+inline Struct_Type *make_struct_type(const Array_Slice<Type *> &members = Array_Slice<Type *>() /*, bool packed = false*/) {
+    Struct_Type *str = new Struct_Type();
+    str->size = 0;
+    str->alignment = 1;
+    // str->packed = packed;
+
+    for (auto m : members) {
+        str->members.push_back(m);
+
+        if (str->size % m->alignment)
+            str->size += m->alignment - (str->size % m->alignment);
+
+        str->size += m->size;
+
+        // TODO account for packedness
+        if (str->alignment < m->alignment)
+            str->alignment = m->alignment;
+    }
+
+    // TODO we may want to differentiate between size and stride of a struct
+    if (str->size % str->alignment)
+        str->size += str->alignment - (str->size % str->alignment);
+
+    return str;
+}
 
 inline
 Type *make_void_type() {
@@ -319,6 +376,8 @@ struct Instruction_GEP : Instruction {
 
     Value *pointer_value = nullptr;
     Value *index         = nullptr;
+    u32 offset = 0;
+    bool is_struct_member_ptr = false;
 };
 
 struct Instruction_Branch : Instruction {
@@ -393,6 +452,18 @@ struct Compilation_Unit {
 };
 
 inline
+Constant *is_constant(Value *value) {
+    return (value->type == VALUE_CONSTANT) ? static_cast<Constant *>(value) : nullptr;
+}
+
+inline
+Instruction *is_instruction(Value *value) {
+    if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) return static_cast<Instruction *>(value);
+
+    return nullptr;
+}
+
+inline
 Argument *make_arg(IR_Context *context, Type *type) {
     Argument *arg = context->new_node<Argument>();
     arg->value_type = type;
@@ -412,22 +483,57 @@ Instruction_Branch *make_branch(IR_Context *context, Value *condition_or_null, V
     return branch;
 }
 
+
+struct Gep_Info { Type *ty; size_t offset; bool is_struct_member_ptr; };
+
 inline
-Instruction_GEP *make_gep(IR_Context *context, Value *pointer_value, Value *index) {
+Gep_Info get_gep_value_type_and_offset(Type *ty, const Array_Slice<Value *> &indices, size_t depth, size_t offset = 0, bool is_member = false) {
+    if (depth == indices.size())
+        return {make_pointer_type(ty), offset, is_member};
+
+    if (Struct_Type *str = ty->as<Struct_Type>()) {
+        Constant *in = static_cast<Constant *>(indices.data[depth]);
+        assert(is_constant(in));
+        assert(in->constant_type == Constant::INTEGER);
+        assert(in->integer_value >= 0 && in->integer_value < str->members.size());
+
+        size_t offset_within_struct = str->offset_of(in->integer_value);
+        Type *mem = str->members[in->integer_value];
+
+        return get_gep_value_type_and_offset(mem, indices, depth + 1, offset + offset_within_struct, true);
+    } else if (Pointer_Type *ptr = ty->as<Pointer_Type>()) {
+        assert(depth == 0);
+        return get_gep_value_type_and_offset(ptr->pointer_to, indices, depth + 1, offset);
+    }
+
+    assert(false);
+    return {nullptr, 0, false};
+}
+
+inline
+Instruction_GEP *make_gep(IR_Context *context, Value *pointer_value, const Array_Slice<Value *> &indices = Array_Slice<Value *>()) {
     Instruction_GEP *gep = context->new_node<Instruction_GEP>();
     gep->pointer_value = pointer_value;
-    gep->index         = index;
-    gep->value_type = pointer_value->value_type;
+
+    assert(indices.size() > 0);
+    gep->index = indices.data[0];
+    gep->index->uses++;
+
+    assert(pointer_value->value_type->as<Pointer_Type>());
+
+    auto [ty, offset, is_member] = get_gep_value_type_and_offset(pointer_value->value_type, indices, 0);
+    gep->value_type = ty;
+    gep->offset = offset;
+    gep->is_struct_member_ptr = is_member;
 
     pointer_value->uses++;
-    index->uses++;
     return gep;
 }
 
 inline
 Instruction_Add *make_add(IR_Context *context, Value *lhs, Value *rhs) {
     assert(types_match(lhs->value_type, rhs->value_type));
-    assert(lhs->value_type->is_integer_type());
+    assert(lhs->value_type->as<Integer_Type>());
 
     Instruction_Add *add = context->new_node<Instruction_Add>();
     add->value_type = lhs->value_type;
@@ -443,7 +549,7 @@ Instruction_Add *make_add(IR_Context *context, Value *lhs, Value *rhs) {
 inline
 Instruction_Sub *make_sub(IR_Context *context, Value *lhs, Value *rhs) {
     assert(types_match(lhs->value_type, rhs->value_type));
-    assert(lhs->value_type->is_integer_type());
+    assert(lhs->value_type->as<Integer_Type>());
 
     Instruction_Sub *sub = context->new_node<Instruction_Sub>();
     sub->value_type = lhs->value_type;
@@ -459,7 +565,7 @@ Instruction_Sub *make_sub(IR_Context *context, Value *lhs, Value *rhs) {
 inline
 Instruction_Mul *make_mul(IR_Context *context, Value *lhs, Value *rhs) {
     assert(types_match(lhs->value_type, rhs->value_type));
-    assert(lhs->value_type->is_integer_type());
+    assert(lhs->value_type->as<Integer_Type>());
 
     Instruction_Mul *sub = context->new_node<Instruction_Mul>();
     sub->value_type = lhs->value_type;
@@ -475,7 +581,7 @@ Instruction_Mul *make_mul(IR_Context *context, Value *lhs, Value *rhs) {
 inline
 Instruction_Div *make_div(IR_Context *context, Value *lhs, Value *rhs, bool signed_division) {
     assert(types_match(lhs->value_type, rhs->value_type));
-    assert(lhs->value_type->is_integer_type());
+    assert(lhs->value_type->as<Integer_Type>());
 
     Instruction_Div *div = context->new_node<Instruction_Div>();
     div->value_type = lhs->value_type;
@@ -564,18 +670,6 @@ Instruction_Return *make_return(IR_Context *context, Value *retval = nullptr) {
     return ret;
 }
 
-inline
-Constant *is_constant(Value *value) {
-    return (value->type == VALUE_CONSTANT) ? static_cast<Constant *>(value) : nullptr;
-}
-
-inline
-Instruction *is_instruction(Value *value) {
-    if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) return static_cast<Instruction *>(value);
-
-    return nullptr;
-}
-
 struct IR_Manager {
     Type *i8;
     Type *i16;
@@ -662,7 +756,13 @@ struct IR_Manager {
     }
 
     Instruction_GEP *insert_gep(Value *pointer_value, Value *index) {
-        auto gep = make_gep(context, pointer_value, index);
+        auto gep = make_gep(context, pointer_value, {index});
+        block->insert(gep);
+        return gep;
+    }
+
+    Instruction_GEP *insert_gep(Value *pointer_value, const Array_Slice<Value *> &indices = Array_Slice<Value *>()) {
+        auto gep = make_gep(context, pointer_value, indices);
         block->insert(gep);
         return gep;
     }

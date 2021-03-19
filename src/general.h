@@ -12,6 +12,7 @@
 #include <string_view>
 #include <vector>
 #include <unordered_map>
+#include <utility>
 
 #include <stdio.h>
 
@@ -24,6 +25,9 @@ using Array = std::vector<T>;
 
 template <typename K, typename V>
 using Map = std::unordered_map<K, V>;
+
+template <typename A, typename B>
+using Pair = std::pair<A, B>;
 
 typedef uint64_t u64;
 typedef uint32_t u32;

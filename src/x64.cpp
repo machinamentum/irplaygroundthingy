@@ -229,7 +229,7 @@ void move_memory_to_reg(Data_Buffer *dataptr, u8 dst, Address_Info info, u32 siz
 }
 
 u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 value, u8 reg, u32 size = 8) {
-     u8 op = (size == 1) ? 0xB0 : 0xB8;
+    u8 op = (size == 1) ? 0xB0 : 0xB8;
 
     _single_register_operand_instruction(dataptr, op, reg, size);
     
@@ -241,6 +241,17 @@ u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 value, u8 reg, u32 size = 8) 
     if (size == 8) *(u64 *)operand = value;
 
     return (u64 *)operand;
+}
+
+// same as move_imm64_to_reg64, but we are allowed to clear the register using shorter instructions
+// if value is 0
+void xor_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size);
+
+void move_imm64_to_reg64_or_clear(Data_Buffer *dataptr, u64 value, u8 reg, u32 size = 8) {
+    if (value)
+        move_imm64_to_reg64(dataptr, value, reg, size);
+    else
+        xor_reg64_to_reg64(dataptr, reg, reg, size);
 }
 
 void move_imm32_sext_to_memory(Data_Buffer *dataptr, s32 value, Address_Info info, u32 size) {
@@ -539,7 +550,7 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
 
             // if (_register != RAX) move_reg64_to_reg64(&code_section->data, RAX, _register);
         } else if (constant->constant_type == Constant::INTEGER) {
-            move_imm64_to_reg64(&code_section->data, constant->integer_value, reg->machine_reg, constant->value_type->size);
+            move_imm64_to_reg64_or_clear(&code_section->data, constant->integer_value, reg->machine_reg, constant->value_type->size);
         } else if (constant->constant_type == Constant::FLOAT) {
             Register *xmm = get_free_xmm_register(emitter);
             if (!xmm) {
@@ -759,6 +770,10 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
             Type *pointee = static_cast<Pointer_Type *>(gep->pointer_value->value_type)->pointer_to;
             u32 size = pointee->size;
 
+            if (gep->is_struct_member_ptr) {
+                size = 1;
+            }
+
             if (size > 8) {
                 imul_reg64_with_imm32(&code_section->data, reg->machine_reg, static_cast<s32>(pointee->size), 8);
                 size = 1;
@@ -766,7 +781,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
             Address_Info info;
             info.machine_reg = RSP; // SIB
-            info.disp        = source.disp;
+            info.disp        = source.disp + gep->offset;
             info.base_reg    = source.machine_reg;
             info.index_reg   = target;
             info.scale       = (u8) size;
@@ -939,7 +954,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
             if (object->target.is_system_v()) {
                 // load number of floating point parameters into %al
-                move_imm64_to_reg64(&code_section->data, num_float_params, RAX, 1);
+                move_imm64_to_reg64_or_clear(&code_section->data, num_float_params, RAX, 1);
             }
 
             if (object->use_absolute_addressing) {

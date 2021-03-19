@@ -33,19 +33,21 @@ void old_test() {
     IR_Manager *irm = new IR_Manager(&context);
     irm->set_block(block);
 
-    auto _alloca = irm->insert_alloca(irm->i64);
-    irm->insert_store(make_integer_constant(&context, 10), _alloca);
+    auto _alloca = irm->insert_alloca(make_struct_type({irm->i64, irm->i64}));
+    auto gep1    = irm->insert_gep(_alloca, {make_integer_constant(&context, 0), make_integer_constant(&context, 0)});
+    auto gep2    = irm->insert_gep(_alloca, {make_integer_constant(&context, 0), make_integer_constant(&context, 1)});
+    irm->insert_store(make_integer_constant(&context, 10), gep2);
+    irm->insert_store(make_integer_constant(&context, 13), gep1);
 
-    {
-        auto load = irm->insert_load(_alloca);
-        auto mul = irm->insert_mul(load, make_integer_constant(&context, 2, irm->i64));
-        irm->insert_store(mul, _alloca);
-    }
+    irm->insert_call(printf_func, {make_string_constant(&context, "GEP1: %d\n"), irm->insert_load(gep1)});
+    irm->insert_call(printf_func, {make_string_constant(&context, "GEP2: %d\n"), irm->insert_load(gep2)});
+
+    irm->insert_return();
 
     unit.functions.push_back(printf_func);
     unit.functions.push_back(main_func);
 
 
-    // emit_obj_file(&unit);
-    do_jit_and_run_program_main(&unit);
+    emit_obj_file(&unit);
+    // do_jit_and_run_program_main(&unit);
 }
