@@ -40,4 +40,7 @@ if (ENABLE_PROGRAMS)
 
     add_executable(old_test programs/old_test.cpp)
     target_link_libraries(old_test lib_objects ${CMAKE_THREAD_LIBS_INIT})
+
+    add_executable(struct_test programs/struct_test.cpp)
+    target_link_libraries(struct_test lib_objects ${CMAKE_THREAD_LIBS_INIT})
 endif()

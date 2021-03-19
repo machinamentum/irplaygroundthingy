@@ -709,15 +709,16 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
             Address_Info target_info = get_address_value_of_pointer(emitter, object, code_section, store->store_target, RAX);
 
             Constant *constant = is_constant(store->source_value);
+            Type *pointee = static_cast<Pointer_Type *>(store->store_target->value_type)->pointer_to;
             if (constant && constant->is_integer()) {
                 s32 value = trunc<s32>(static_cast<s64>(constant->integer_value));
-                move_imm32_sext_to_memory(&code_section->data, value, target_info, store->store_target->value_type->pointer_to->size);
+                move_imm32_sext_to_memory(&code_section->data, value, target_info, pointee->size);
             } else {
                 u8 source = maybe_get_instruction_register(store->source_value);
                 if (source == 0xFF) source = emit_load_of_value(emitter, object, code_section, store->source_value, (target_info.machine_reg == RAX) ? RCX : RAX);
 
                 assert(target_info.machine_reg != source);
-                move_register_value_to_memory(&code_section->data, source, target_info, store->store_target->value_type->pointer_to);
+                move_register_value_to_memory(&code_section->data, source, target_info, pointee);
             }
 
             store->store_target->uses--;
@@ -755,10 +756,11 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
             Register *reg = claim_register(emitter, &emitter->register_usage[target], inst);
 
-            u32 size = gep->pointer_value->value_type->pointer_to->size;
+            Type *pointee = static_cast<Pointer_Type *>(gep->pointer_value->value_type)->pointer_to;
+            u32 size = pointee->size;
 
             if (size > 8) {
-                imul_reg64_with_imm32(&code_section->data, reg->machine_reg, static_cast<s32>(gep->pointer_value->value_type->pointer_to->size), 8);
+                imul_reg64_with_imm32(&code_section->data, reg->machine_reg, static_cast<s32>(pointee->size), 8);
                 size = 1;
             }
 
@@ -846,7 +848,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
         case INSTRUCTION_CALL: {
             auto call = static_cast<Instruction_Call *>(inst);
             auto function_target = static_cast<Function *>(call->call_target);
-            auto func_type = function_target->value_type;
+            auto func_type = static_cast<Function_Type *>(function_target->value_type);
 
             assert(func_type->type == Type::FUNCTION);
 
@@ -922,7 +924,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                         move_reg64_to_reg64(&code_section->data, result, param_reg);
                 }
 
-                if (is_float && object->target.is_win32() && func_type->function.is_varargs && i >= func_type->function.parameters.size()) {
+                if (is_float && object->target.is_win32() && func_type->is_varargs && i >= func_type->parameters.size()) {
                     // move float value into corresponding integer register slot
                     movq_xmm_to_reg(&code_section->data, param_reg, int_param_reg, 8);
                 }

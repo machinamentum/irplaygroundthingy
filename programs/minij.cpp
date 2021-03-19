@@ -782,7 +782,7 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
 
             if (bin->operator_type == '=') {
                 left  = emit_expression(bin->lhs, function, unit, irfunc, irm);
-                right = emit_expression(bin->rhs, function, unit, irfunc, irm, left->value_type->pointer_to);
+                right = emit_expression(bin->rhs, function, unit, irfunc, irm, left->value_type->as<Pointer_Type>()->pointer_to);
             } else {
                 if (bin->lhs->type == AST::LITERAL) {
                     right = emit_expression(bin->rhs, function, unit, irfunc, irm);
@@ -841,7 +841,7 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
             }
 
             assert(target);
-            auto func_type = target->value_type;
+            auto func_type = static_cast<Function_Type *>(target->value_type);
 
             Array<Value *> args;
 
@@ -849,7 +849,7 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
                 auto a = call->arguments[i];
 
                 Type *param_type = nullptr;
-                if (i < func_type->function.parameters.size()) param_type = func_type->function.parameters[i];
+                if (i < func_type->parameters.size()) param_type = func_type->parameters[i];
 
                 args.push_back(emit_expression(a, function, unit, irfunc, irm, param_type));
             }

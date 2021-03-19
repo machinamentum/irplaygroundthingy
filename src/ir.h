@@ -46,36 +46,52 @@ enum {
 };
 
 struct Type {
-    enum {
+    enum _Type : u32 {
         VOID,
         INTEGER,
         FLOAT,
         POINTER,
         FUNCTION,
-    };
+    } type;
 
-    u32 type;
     u32 size;
     u32 alignment;
 
-    struct Function_Info {
-        Array<Type *> parameters;
-        Type *result_type;
-        bool is_varargs;
-    };
+    template<typename T>
+    T *as() {
+        return (type == T::TYPE) ? static_cast<T *>(this) : nullptr;
+    }
+};
 
-    union {
-        Type *pointer_to;
+struct Void_Type : Type {
+    static const Type::_Type TYPE = VOID;
+    Void_Type() { type = TYPE; }
+};
 
-        Function_Info function;
-    };
+struct Integer_Type : Type {
+    static const Type::_Type TYPE = INTEGER;
+    Integer_Type() { type = TYPE; }
+};
 
-    Type() {}
+struct Float_Type : Type {
+    static const Type::_Type TYPE = FLOAT;
+    Float_Type() { type = TYPE; }
+};
 
-    bool is_integer_type()  { return type == INTEGER; }
-    bool is_float_type()    { return type == FLOAT; }
-    bool is_pointer_type()  { return type == POINTER; }
-    bool is_function_type() { return type == FUNCTION; }
+struct Pointer_Type : Type {
+    static const Type::_Type TYPE = POINTER;
+    Pointer_Type() { type = TYPE; }
+
+    Type *pointer_to;
+};
+
+struct Function_Type : Type {
+    static const Type::_Type TYPE = FUNCTION;
+    Function_Type() { type = TYPE; }
+
+    Array<Type *> parameters;
+    Type *result_type;
+    bool is_varargs;
 };
 
 inline
@@ -86,45 +102,40 @@ Type *make_void_type() {
 }
 
 inline
-Type *make_func_type(Type *result_type, const Array_Slice<Type *> &parameters = Array_Slice<Type *>(), bool is_varargs = false) {
-    Type *type = new Type();
-    type->type = Type::FUNCTION;
-    new (&type->function) Type::Function_Info;
+Function_Type *make_func_type(Type *result_type, const Array_Slice<Type *> &parameters = Array_Slice<Type *>(), bool is_varargs = false) {
+    Function_Type *type = new Function_Type();
 
-    type->function.result_type = result_type;
+    type->result_type = result_type;
     type->size = 8; // @TargetInfo
     type->alignment = type->size;
 
     for (auto p : parameters) {
-        type->function.parameters.push_back(p);
+        type->parameters.push_back(p);
     }
-    type->function.is_varargs = is_varargs;
+    type->is_varargs = is_varargs;
     return type;
 }
 
 inline
-Type *make_integer_type(u32 size) {
+Integer_Type *make_integer_type(u32 size) {
     assert(size >= 1 && size <= 8);
-    Type *type      = new Type();
-    type->type      = Type::INTEGER;
+    Integer_Type *type      = new Integer_Type();
     type->size      = size;
     type->alignment = type->size;
     return type;
 }
 
 inline
-Type *make_float_type(u32 size) {
-    Type *type      = new Type();
-    type->type      = Type::FLOAT;
+Float_Type *make_float_type(u32 size) {
+    Float_Type *type      = new Float_Type();
     type->size      = size;
     type->alignment = size; 
     return type;
 }
 
 inline
-Type *make_pointer_type(Type *pointee) {
-    Type *type = new Type();
-    type->type = Type::POINTER;
+Pointer_Type *make_pointer_type(Type *pointee) {
+    Pointer_Type *type = new Pointer_Type();
     type->size = 8; // @TargetInfo
     type->alignment = type->size;
     type->pointer_to = pointee;
@@ -139,16 +150,19 @@ bool types_match(Type *a, Type *b) {
     if (a->alignment != b->alignment) return false;
 
     if (a->type == Type::POINTER) {
-        return types_match(a->pointer_to, b->pointer_to);
+        return types_match(static_cast<Pointer_Type *>(a)->pointer_to, static_cast<Pointer_Type *>(b)->pointer_to);
     }
 
     if (a->type == Type::FUNCTION) {
-        if (a->function.parameters.size() != b->function.parameters.size()) return false;
-        if (!types_match(a->function.result_type, b->function.result_type)) return false;
-        if (a->function.is_varargs != b->function.is_varargs) return false;
+        Function_Type *afunc = static_cast<Function_Type *>(a);
+        Function_Type *bfunc = static_cast<Function_Type *>(b);
 
-        for (u32 i = 0; i < a->function.parameters.size(); ++i) {
-            if (!types_match(a->function.parameters[i], b->function.parameters[i])) return false;
+        if (afunc->parameters.size() != bfunc->parameters.size()) return false;
+        if (!types_match(afunc->result_type, bfunc->result_type)) return false;
+        if (afunc->is_varargs != bfunc->is_varargs) return false;
+
+        for (u32 i = 0; i < afunc->parameters.size(); ++i) {
+            if (!types_match(afunc->parameters[i], bfunc->parameters[i])) return false;
         }
 
         return true;
@@ -478,10 +492,10 @@ Instruction_Div *make_div(IR_Context *context, Value *lhs, Value *rhs, bool sign
 
 inline
 Instruction_Load *make_load(IR_Context *context, Value *pointer_value) {
-    assert(pointer_value->value_type->type == Type::POINTER);
+    assert(pointer_value->value_type->as<Pointer_Type>());
     Instruction_Load *load = context->new_node<Instruction_Load>();
     load->pointer_value = pointer_value;
-    load->value_type    = pointer_value->value_type->pointer_to;
+    load->value_type    = pointer_value->value_type->as<Pointer_Type>()->pointer_to;
 
     pointer_value->uses++;
     return load;
@@ -512,30 +526,30 @@ Instruction_Alloca *make_alloca(IR_Context *context, Type *alloca_type, u32 arra
 inline
 Instruction_Call *make_call(IR_Context *context, Value *target, const Array_Slice<Value *> &parameters = Array_Slice<Value *>()) {
     assert(target->value_type && target->value_type->type == Type::FUNCTION);
+    auto func_type = target->value_type->as<Function_Type>();
+
     Instruction_Call *call = context->new_node<Instruction_Call>();
     call->call_target = target;
-    call->value_type = target->value_type->function.result_type;
+    call->value_type = func_type->result_type;
     target->uses++;
 
-    auto func_type = target->value_type;
+    if (parameters.size() < func_type->parameters.size())
+        printf("Expected %zu arguments, got %zu\n", func_type->parameters.size(), parameters.size());
 
-    if (parameters.size() < func_type->function.parameters.size())
-        printf("Expected %zu arguments, got %zu\n", func_type->function.parameters.size(), parameters.size());
+    if (!func_type->is_varargs && parameters.size() > func_type->parameters.size())
+        printf("Expected %zu arguments, got %zu\n", func_type->parameters.size(), parameters.size());
 
-    if (!func_type->function.is_varargs && parameters.size() > func_type->function.parameters.size())
-        printf("Expected %zu arguments, got %zu\n", func_type->function.parameters.size(), parameters.size());
-
-    if (func_type->function.is_varargs) assert(parameters.size() >= func_type->function.parameters.size());
-    else                                assert(parameters.size() == func_type->function.parameters.size());
+    if (func_type->is_varargs) assert(parameters.size() >= func_type->parameters.size());
+    else                                assert(parameters.size() == func_type->parameters.size());
 
     for (const auto v : parameters) {
         call->parameters.push_back(v);
         v->uses++;
     }
 
-    for (u32 i = 0; i < func_type->function.parameters.size(); ++i) {
+    for (u32 i = 0; i < func_type->parameters.size(); ++i) {
         auto vt = call->parameters[i]->value_type;
-        auto ft = func_type->function.parameters[i];
+        auto ft = func_type->parameters[i];
 
         assert(types_match(vt, ft));
     }
