@@ -755,17 +755,33 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
         case INSTRUCTION_GEP: {
             Instruction_GEP *gep = static_cast<Instruction_GEP *>(inst);
 
-            u8 target = maybe_get_instruction_register(gep->index);
+            s32 constant_disp = 0;
+            bool use_constant_disp = false;
+            if (Constant *con = is_constant(gep->index); fits_into<s32>(con->integer_value)) {
+                assert(con->constant_type == Constant::INTEGER);
+
+                use_constant_disp = true;
+                constant_disp = con->integer_value;
+            }
+
+            u8 target = 0xFF;
+            if (!use_constant_disp)
+                target = maybe_get_instruction_register(gep->index);
 
             Address_Info source = get_address_value_of_pointer(emitter, object, code_section, gep->pointer_value, (target == RAX) ? RCX : RAX);
             gep->pointer_value->uses--;
 
-            if (target == 0xFF) target = emit_load_of_value(emitter, object, code_section, gep->index,         (source.machine_reg == RAX) ? RCX : RAX);
+            if (target == 0xFF && !use_constant_disp) target = emit_load_of_value(emitter, object, code_section, gep->index,         (source.machine_reg == RAX) ? RCX : RAX);
             gep->index->uses--;
 
             assert(source.machine_reg != target);
 
-            Register *reg = claim_register(emitter, &emitter->register_usage[target], inst);
+            Register *reg;
+
+            if (!use_constant_disp)
+                reg = claim_register(emitter, &emitter->register_usage[target], inst);
+            else
+                reg = get_free_or_suggested_register(emitter, (source.machine_reg == RAX) ? RCX : RAX, false, inst);
 
             Type *pointee = static_cast<Pointer_Type *>(gep->pointer_value->value_type)->pointer_to;
             u32 size = pointee->size;
@@ -774,17 +790,24 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                 size = 1;
             }
 
-            if (size > 8) {
+            if (size > 8 && !use_constant_disp) {
                 imul_reg64_with_imm32(&code_section->data, reg->machine_reg, static_cast<s32>(pointee->size), 8);
                 size = 1;
             }
 
             Address_Info info;
-            info.machine_reg = RSP; // SIB
-            info.disp        = source.disp + gep->offset;
-            info.base_reg    = source.machine_reg;
-            info.index_reg   = target;
-            info.scale       = (u8) size;
+
+            if (!use_constant_disp) {
+                info.machine_reg = RSP; // SIB
+                info.disp        = source.disp + gep->offset;
+                info.base_reg    = source.machine_reg;
+                info.index_reg   = target;
+                info.scale       = (u8) size;
+            } else {
+                info.machine_reg = source.machine_reg;
+                info.disp        = (source.disp + gep->offset) * size;
+                info.scale       = 1;
+            }
 
             if   (source.disp) lea_into_reg64(&code_section->data, reg->machine_reg, info);
             else               add_reg64_to_reg64(&code_section->data, source.machine_reg, reg->machine_reg, gep->value_type->size);
