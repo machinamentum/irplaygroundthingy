@@ -34,13 +34,24 @@ void old_test() {
     irm->set_block(block);
 
     auto _alloca = irm->insert_alloca(make_struct_type({irm->i64, irm->i64}));
-    auto gep1    = irm->insert_gep(_alloca, {make_integer_constant(&context, 0), make_integer_constant(&context, 0)});
+    auto gep1    = irm->insert_gep(_alloca, {make_integer_constant(&context, 0), make_integer_constant(&context, 0)}); 
     auto gep2    = irm->insert_gep(_alloca, {make_integer_constant(&context, 0), make_integer_constant(&context, 1)});
     irm->insert_store(make_integer_constant(&context, 10), gep2);
     irm->insert_store(make_integer_constant(&context, 13), gep1);
 
+    auto _alloca2 = irm->insert_alloca(make_struct_type({irm->i64, irm->i64}));
+    irm->insert_store(irm->insert_load(_alloca), _alloca2);
+    auto gep3    = irm->insert_gep(_alloca2, {make_integer_constant(&context, 0), make_integer_constant(&context, 0)});
+    auto gep4    = irm->insert_gep(_alloca2, {make_integer_constant(&context, 0), make_integer_constant(&context, 1)});
+
+    irm->insert_store(make_integer_constant(&context, 25), gep2);
+    irm->insert_store(make_integer_constant(&context, 22), gep1);
+
     irm->insert_call(printf_func, {make_string_constant(&context, "GEP1: %d\n"), irm->insert_load(gep1)});
     irm->insert_call(printf_func, {make_string_constant(&context, "GEP2: %d\n"), irm->insert_load(gep2)});
+
+    irm->insert_call(printf_func, {make_string_constant(&context, "GEP3: %d\n"), irm->insert_load(gep3)});
+    irm->insert_call(printf_func, {make_string_constant(&context, "GEP4: %d\n"), irm->insert_load(gep4)});
 
     irm->insert_return();
 

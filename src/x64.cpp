@@ -228,6 +228,19 @@ void move_memory_to_reg(Data_Buffer *dataptr, u8 dst, Address_Info info, u32 siz
     _move_bidrectional(dataptr, dst, info, size, false);
 }
 
+// RCX = count
+// RDI = dst
+// RSI = src
+void rep_move_string(Data_Buffer *dataptr, u32 size) {
+    if (size == 2) dataptr->append_byte(0x66);
+
+    u8 op = (size == 1) ? 0xA4 : 0xA5;
+
+    dataptr->append_byte(0xF3);
+    dataptr->append_byte(REX((size == 8) ? 1 : 0, 0, 0, 0));
+    dataptr->append_byte(op);
+}
+
 u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 value, u8 reg, u32 size = 8) {
     u8 op = (size == 1) ? 0xB0 : 0xB8;
 
@@ -241,17 +254,6 @@ u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 value, u8 reg, u32 size = 8) 
     if (size == 8) *(u64 *)operand = value;
 
     return (u64 *)operand;
-}
-
-// same as move_imm64_to_reg64, but we are allowed to clear the register using shorter instructions
-// if value is 0
-void xor_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size);
-
-void move_imm64_to_reg64_or_clear(Data_Buffer *dataptr, u64 value, u8 reg, u32 size = 8) {
-    if (value)
-        move_imm64_to_reg64(dataptr, value, reg, size);
-    else
-        xor_reg64_to_reg64(dataptr, reg, reg, size);
 }
 
 void move_imm32_sext_to_memory(Data_Buffer *dataptr, s32 value, Address_Info info, u32 size) {
@@ -276,6 +278,41 @@ void move_memory_to_reg_zero_ext(Data_Buffer *dataptr, u8 value_reg, Address_Inf
         move_memory_to_reg(dataptr, value_reg, info, size);
     }
 }
+
+void move_reg_to_reg_zero_ext(Data_Buffer *dataptr, u8 src, u8 dst, u32 srcsize, u32 dstsize) {
+    assert(srcsize <= 2);
+    assert(dstsize >= 2);
+    assert(dstsize > srcsize);
+
+    u8 op = (srcsize == 1) ? 0xB6 : 0xB7;
+
+    _two_register_operand_instruction(dataptr, op, true, dst, addr_register_disp(src), dstsize, true);
+}
+
+void move_imm_to_reg(Data_Buffer *dataptr, u64 value, u8 reg) {
+    if (fits_into<u8>(value)) {
+        move_imm64_to_reg64(dataptr, value, reg, 1);
+        move_reg_to_reg_zero_ext(dataptr, reg, reg, 1, 8);
+    } else if (fits_into<u16>(value)) {
+        move_imm64_to_reg64(dataptr, value, reg, 2);
+        move_reg_to_reg_zero_ext(dataptr, reg, reg, 2, 8);
+    } else if (fits_into<u32>(value))
+        move_imm64_to_reg64(dataptr, value, reg, 4);
+    else
+        move_imm64_to_reg64(dataptr, value, reg, 8);
+}
+
+
+void xor_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size);
+// same as move_imm64_to_reg64, but we are allowed to clear the register using xor if 0 or try to stuff the value
+// into as small a register as possible then zext if needed
+void move_imm_to_reg_or_clear(Data_Buffer *dataptr, u64 value, u8 reg) {
+    if (value)
+        move_imm_to_reg(dataptr, value, reg);
+    else
+        xor_reg64_to_reg64(dataptr, reg, reg, 8);
+}
+
 
 // Need to allocate 4 bytes of space after this call
 s32 *lea_rip_relative_into_reg64(Data_Buffer *dataptr, u8 reg) {
@@ -550,7 +587,7 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
 
             // if (_register != RAX) move_reg64_to_reg64(&code_section->data, RAX, _register);
         } else if (constant->constant_type == Constant::INTEGER) {
-            move_imm64_to_reg64_or_clear(&code_section->data, constant->integer_value, reg->machine_reg, constant->value_type->size);
+            move_imm_to_reg_or_clear(&code_section->data, constant->integer_value, reg->machine_reg);
         } else if (constant->constant_type == Constant::FLOAT) {
             Register *xmm = get_free_xmm_register(emitter);
             if (!xmm) {
@@ -717,6 +754,26 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
         case INSTRUCTION_STORE: {
             auto store = static_cast<Instruction_Store *>(inst);
 
+            if (Struct_Type *str = store->source_value->value_type->as<Struct_Type>()) {
+                u8 source = emit_load_of_value(emitter, object, code_section, store->source_value, RSI, true);
+                u8 target = emit_load_of_value(emitter, object, code_section, store->store_target, RDI, true);
+
+                // Spill all three registers because this instruction modifies all of them
+                maybe_spill_register(emitter, &emitter->register_usage[RSI]);
+                maybe_spill_register(emitter, &emitter->register_usage[RDI]);
+                maybe_spill_register(emitter, &emitter->register_usage[RCX]);
+
+                if (source != RSI)
+                    move_reg64_to_reg64(&code_section->data, source, RSI);
+
+                if (target != RDI)
+                    move_reg64_to_reg64(&code_section->data, source, RDI);
+
+                move_imm_to_reg_or_clear(&code_section->data, str->size, RCX);
+                rep_move_string(&code_section->data, 1);
+                return 0;
+            }
+
             Address_Info target_info = get_address_value_of_pointer(emitter, object, code_section, store->store_target, RAX);
 
             Constant *constant = is_constant(store->source_value);
@@ -746,9 +803,12 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
             if (target_reg == RBP || target_reg == RSP) target_reg = RAX;
 
             load->pointer_value->uses--;
-             Register *reg = get_free_or_suggested_register(emitter, RAX, false, inst);
+            Register *reg = get_free_or_suggested_register(emitter, RAX, false, inst);
 
-            move_memory_value_to_register(&code_section->data, reg->machine_reg, source, load->value_type);
+            if (load->value_type->as<Struct_Type>())
+                lea_into_reg64(&code_section->data, reg->machine_reg, source);
+            else
+                move_memory_value_to_register(&code_section->data, reg->machine_reg, source, load->value_type);
             return reg->machine_reg;
         }
 
@@ -978,7 +1038,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
             if (object->target.is_system_v()) {
                 // load number of floating point parameters into %al
-                move_imm64_to_reg64_or_clear(&code_section->data, num_float_params, RAX, 1);
+                move_imm_to_reg_or_clear(&code_section->data, num_float_params, RAX);
             }
 
             if (object->use_absolute_addressing) {
