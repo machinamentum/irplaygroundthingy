@@ -757,7 +757,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
             s32 constant_disp = 0;
             bool use_constant_disp = false;
-            if (Constant *con = is_constant(gep->index); fits_into<s32>(con->integer_value)) {
+            if (Constant *con = is_constant(gep->index); con && fits_into<s32>(con->integer_value)) {
                 assert(con->constant_type == Constant::INTEGER);
 
                 use_constant_disp = true;
