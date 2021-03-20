@@ -220,7 +220,7 @@ int main(int argc, char **argv) {
 
     gen_bf_instruction(main_func, bfg);
 
-    main_func->blocks[main_func->blocks.size()-1]->insert(new Instruction_Return());
+    bfg->insert_return();
 
     // emit_obj_file(&unit);
     do_jit_and_run_program_main(&unit);
