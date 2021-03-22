@@ -76,7 +76,7 @@ void struct_test() {
     // irm->insert_store(make_integer_constant(&context, 25), gep2);
     // irm->insert_store(make_integer_constant(&context, 22), gep1);
 
-    irm->insert_call(printf_func, {make_string_constant(&context, "GEP1: %d\n"), irm->insert_call(get_field_func, {irm->insert_load(_alloca)})});
+    irm->insert_call(printf_func, {make_string_constant(&context, "GEP2: %d\n"), irm->insert_call(get_field_func, {irm->insert_load(_alloca)})});
     // irm->insert_call(printf_func, {make_string_constant(&context, "GEP2: %d\n"), irm->insert_load(gep2)});
 
     // irm->insert_call(printf_func, {make_string_constant(&context, "GEP3: %d\n"), irm->insert_call(get_field_func, {irm->insert_load(_alloca2)})});
