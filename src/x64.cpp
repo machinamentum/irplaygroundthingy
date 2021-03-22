@@ -290,10 +290,10 @@ void move_reg_to_reg_zero_ext(Data_Buffer *dataptr, u8 src, u8 dst, u32 srcsize,
 }
 
 void move_imm_to_reg(Data_Buffer *dataptr, u64 value, u8 reg) {
-    if (fits_into<u8>(value)) {
+    if (false && fits_into<u8>(value)) { // This doesn't actually save us any more instruction bytes over the u32 variant, and actually introduces more bytes
         move_imm64_to_reg64(dataptr, value, reg, 1);
         move_reg_to_reg_zero_ext(dataptr, reg, reg, 1, 8);
-    } else if (fits_into<u16>(value)) {
+    } else if (false && fits_into<u16>(value)) { // This doesn't actually save us any more instruction bytes over the u32 variant
         move_imm64_to_reg64(dataptr, value, reg, 2);
         move_reg_to_reg_zero_ext(dataptr, reg, reg, 2, 8);
     } else if (fits_into<u32>(value))
@@ -301,7 +301,6 @@ void move_imm_to_reg(Data_Buffer *dataptr, u64 value, u8 reg) {
     else
         move_imm64_to_reg64(dataptr, value, reg, 8);
 }
-
 
 void xor_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size);
 // same as move_imm64_to_reg64, but we are allowed to clear the register using xor if 0 or try to stuff the value
@@ -411,14 +410,18 @@ void cwd_cdq(Data_Buffer *dataptr, u32 size) {
 
 void move_memory_value_to_register(Data_Buffer *dataptr, u8 value_reg, Address_Info info, Type *type) {
     if (type->type == Type::FLOAT)
-            move_memory_to_xmm(dataptr, value_reg, info, type->size);
-        else
-            move_memory_to_reg_zero_ext(dataptr, value_reg, info, type->size);
+        move_memory_to_xmm(dataptr, value_reg, info, type->size);
+    else if (auto str = type->as<Struct_Type>()) // Struct types are tracked by memory reference for now
+        move_memory_to_reg_zero_ext(dataptr, value_reg, info, 8 /*PointerSize TargetInfo*/);
+    else
+        move_memory_to_reg_zero_ext(dataptr, value_reg, info, type->size);
 }
 
 void move_register_value_to_memory(Data_Buffer *dataptr, u8 value_reg, Address_Info info, Type *type) {
     if (type->type == Type::FLOAT)
         move_xmm_to_memory(dataptr, value_reg, info, type->size);
+    else if (auto str = type->as<Struct_Type>()) // Struct types are tracked by memory reference for now
+        move_reg_to_memory(dataptr, value_reg, info, 8 /*PointerSize TargetInfo*/);
     else
         move_reg_to_memory(dataptr, value_reg, info, type->size);
 }
@@ -667,6 +670,14 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
         lea_into_reg64(&code_section->data, reg->machine_reg, addr_register_disp(RBP, _alloca->stack_offset));
         return reg->machine_reg;
     } else if (value->type == VALUE_ARGUMENT) {
+        auto arg = static_cast<Argument *>(value);
+        if (arg->copied_to_stack_offset) {
+            Address_Info info = addr_register_disp(RBP, arg->copied_to_stack_offset);
+            Register *reg = get_free_or_suggested_register(emitter, suggested_register, force_use_suggested, nullptr);
+            lea_into_reg64(&code_section->data, reg->machine_reg, info);
+            return reg->machine_reg;
+        }
+
         return load_instruction_result(emitter, value, suggested_register, force_use_suggested);
     } else if (value->type >= INSTRUCTION_FIRST && value->type <= INSTRUCTION_LAST) {
         auto inst = static_cast<Instruction *>(value);
@@ -691,6 +702,11 @@ Address_Info get_address_value_of_pointer(X64_Emitter *emitter, Linker_Object *o
     if (value->type == INSTRUCTION_ALLOCA) {
         auto _alloca = static_cast<Instruction_Alloca *>(value);
         return addr_register_disp(RBP, _alloca->stack_offset);
+    }
+    else if (value->type == VALUE_ARGUMENT) {
+        auto arg = static_cast<Argument *>(value);
+        if (arg->copied_to_stack_offset)
+            return addr_register_disp(RBP, arg->copied_to_stack_offset);
     }
 
 // We could theoretically do this and save some instructions
@@ -733,7 +749,7 @@ Address_Info get_address_value_of_pointer(X64_Emitter *emitter, Linker_Object *o
     }
 #endif
 
-    else {
+    {
         u8 machine_reg = emit_load_of_value(emitter, object, code_section, value, suggested_register);
         return addr_register_disp(machine_reg);
     }
@@ -1016,6 +1032,23 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
                 u8 result = emit_load_of_value(emitter, object, code_section, p, int_param_reg, true);
 
+                if (auto str = p->value_type->as<Struct_Type>(); str && str->size <= 16 && object->target.is_system_v()) {
+                    // Move the latter half of the struct into next integer register.
+                    // TOOD incomplete, we need to move this value onto the stack if we don't have enough integer parameters
+                    if (str->size > 8) {
+                        u8 next_param = emitter->parameter_registers[integer_param_index];
+
+                        Address_Info info = addr_register_disp(result, 8);
+                        move_memory_to_reg(&code_section->data, next_param, info, str->size - 8);
+                        integer_param_index += 1;
+                    }
+
+                    Address_Info info = addr_register_disp(result);
+                    move_memory_to_reg(&code_section->data, param_reg, info, str->size > 8 ? 8 : str->size);
+                    p->uses--;
+                    continue;
+                }
+
                 if (result != param_reg) {
                     if (is_float)
                         move_xmm_to_xmm(&code_section->data, result, param_reg);
@@ -1275,9 +1308,30 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
 
     move_reg64_to_reg64(&code_section->data, RSP, RBP);
 
+    u32 reg_index = 0;
     for (u32 i = 0; i < function->arguments.size(); ++i) {
         Argument *arg = function->arguments[i];
-        claim_register(emitter, &emitter->register_usage[emitter->parameter_registers[i]], arg);
+
+        // TODO this is just a hacky way of handling small structs on System V, it is not totally correct
+        if (auto str = arg->value_type->as<Struct_Type>(); str && str->size <= 16 && object->target.is_system_v()) {
+            emitter->stack_size += str->size;
+
+            Address_Info info = addr_register_disp(RBP, -emitter->stack_size);
+            move_reg_to_memory(&code_section->data, emitter->parameter_registers[reg_index], info, str->size > 8 ? 8 : str->size);
+            reg_index += 1;
+
+            if (str->size > 8) {
+                info.disp += 8;
+                move_reg_to_memory(&code_section->data, emitter->parameter_registers[reg_index], info, str->size - 8);
+                reg_index += 1;
+            }
+
+            arg->copied_to_stack_offset = -emitter->stack_size;
+            continue;
+        }
+
+        claim_register(emitter, &emitter->register_usage[emitter->parameter_registers[reg_index]], arg);
+        reg_index += 1;
     }
 
     for (auto block : function->blocks) {

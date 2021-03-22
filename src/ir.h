@@ -225,6 +225,22 @@ bool types_match(Type *a, Type *b) {
         return true;
     }
 
+    if (a->type == Type::STRUCT) {
+        Struct_Type *astr = static_cast<Struct_Type *>(a);
+        Struct_Type *bstr = static_cast<Struct_Type *>(b);
+
+        // Right now, if two structs have all the same fields, they match
+        if (astr->members.size() != bstr->members.size())
+            return false;
+
+        for (size_t i = 0; i < astr->members.size(); ++i) {
+            if (!types_match(astr->members[i], bstr->members[i]))
+                return false;
+        }
+
+        return true;
+    }
+
     return true;
 }
 
@@ -426,6 +442,8 @@ struct Global_Value : Constant {
 
 struct Argument : Value {
     Argument() { type = VALUE_ARGUMENT; }
+
+    s32 copied_to_stack_offset = 0;
 };
 
 struct Function : Global_Value {
