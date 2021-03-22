@@ -4,10 +4,10 @@
 
 using namespace josh;
 
-void old_test();
+void struct_test();
 
 int main(int argc, char **argv) {
-    old_test();
+    struct_test();
     return 0;
 }
 
@@ -35,7 +35,7 @@ Function *emit_get_field1_func(IR_Manager *irm, Struct_Type *str) {
     return get;
 }
 
-void old_test() {
+void struct_test() {
     Compilation_Unit unit;
     unit.target = get_host_target();
 
