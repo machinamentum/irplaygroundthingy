@@ -750,25 +750,69 @@ struct IR_Manager {
         return store;
     }
 
-    Instruction_Add *insert_add(Value *lhs, Value *rhs) {
+    Value *insert_add(Value *lhs, Value *rhs) {
+        Constant *clhs = is_constant(lhs);
+        Constant *crhs = is_constant(rhs);
+
+        if (clhs && crhs && clhs->is_integer() && crhs->is_integer()) {
+            assert(types_match(lhs->value_type, rhs->value_type));
+            assert(lhs->value_type->as<Integer_Type>());
+
+            return make_integer_constant(context, clhs->integer_value + crhs->integer_value, lhs->value_type);
+        }
+
         auto add = make_add(context, lhs, rhs);
         block->insert(add);
         return add;
     }
 
-    Instruction_Sub *insert_sub(Value *lhs, Value *rhs) {
+    Value *insert_sub(Value *lhs, Value *rhs) {
+        Constant *clhs = is_constant(lhs);
+        Constant *crhs = is_constant(rhs);
+
+        if (clhs && crhs && clhs->is_integer() && crhs->is_integer()) {
+            assert(types_match(lhs->value_type, rhs->value_type));
+            assert(lhs->value_type->as<Integer_Type>());
+
+            return make_integer_constant(context, clhs->integer_value - crhs->integer_value, lhs->value_type);
+        }
+
         auto sub = make_sub(context, lhs, rhs);
         block->insert(sub);
         return sub;
     }
 
-    Instruction_Mul *insert_mul(Value *lhs, Value *rhs) {
+    Value *insert_mul(Value *lhs, Value *rhs) {
+        Constant *clhs = is_constant(lhs);
+        Constant *crhs = is_constant(rhs);
+
+        if (clhs && crhs && clhs->is_integer() && crhs->is_integer()) {
+            assert(types_match(lhs->value_type, rhs->value_type));
+            assert(lhs->value_type->as<Integer_Type>());
+
+            return make_integer_constant(context, clhs->integer_value * crhs->integer_value, lhs->value_type);
+        }
+
         auto mul = make_mul(context, lhs, rhs);
         block->insert(mul);
         return mul;
     }
 
-    Instruction_Div *insert_div(Value *lhs, Value *rhs, bool signed_division) {
+    Value *insert_div(Value *lhs, Value *rhs, bool signed_division) {
+        Constant *clhs = is_constant(lhs);
+        Constant *crhs = is_constant(rhs);
+
+        if (clhs && crhs && clhs->is_integer() && crhs->is_integer()) {
+            assert(types_match(lhs->value_type, rhs->value_type));
+            assert(lhs->value_type->as<Integer_Type>());
+
+            if (signed_division)
+                // FIXME this should check the size of the incoming integer type and properly cast up if smaller than 64 bits.
+                return make_integer_constant(context, (s64)clhs->integer_value / (s64)crhs->integer_value, lhs->value_type);
+            else
+                return make_integer_constant(context, clhs->integer_value / crhs->integer_value, lhs->value_type);
+        }
+
         auto div = make_div(context, lhs, rhs, signed_division);
         block->insert(div);
         return div;

@@ -21,7 +21,7 @@ struct BF_Gen : IR_Manager {
 };
 
 void gen_bf_instruction(Function *function, BF_Gen *bfg) {
-    Instruction *load = bfg->insert_load(bfg->index_alloca);
+    Value *load = bfg->insert_load(bfg->index_alloca);
     auto gep = bfg->insert_gep(bfg->data_buffer_alloca, load);
 
     Constant *constant_one_index = make_integer_constant(bfg->context, 1, load->value_type);
