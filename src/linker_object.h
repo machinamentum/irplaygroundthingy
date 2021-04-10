@@ -11,21 +11,21 @@ struct Compilation_Unit;
 
 struct Target {
 
-    enum Cpu_Arch {
+    enum Cpu_Arch : u8 {
         CPU_UNDEFINED = 0,
         CPU_X86_64    = 1,
         CPU_AAarch64  = 2,
     };
 
-    enum {
+    enum OS : u8 {
         WINDOWS,
         MACOSX,
         LINUX,
         C_VIRTUAL_OS,
     };
 
-    u8 os;
-    u8 cpuarch;
+    OS os;
+    Cpu_Arch cpuarch;
 
     bool is_win32() { return os == WINDOWS; }
     bool is_macOS() { return os == MACOSX;  }
