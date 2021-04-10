@@ -8,6 +8,7 @@ namespace josh {
 
 struct Global_Value;
 struct Compilation_Unit;
+struct IR_Context;
 
 struct Target {
 
@@ -78,7 +79,7 @@ struct Section {
 };
 
 struct Symbol {
-    String linkage_name;
+    String_ID linkage_name;
     u8 section_number  = 0;
     u32 section_offset  = 0;
     bool is_externally_defined  = false;
@@ -86,8 +87,6 @@ struct Symbol {
     bool is_function = false;
     bool is_section  = false;
 };
-
-
 
 struct Linker_Object {
     Target target;
@@ -99,9 +98,9 @@ struct Linker_Object {
 
 u32 get_symbol_index(Linker_Object *object, Global_Value *value);
 
-void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *text_index, u32 *data_index);
+void generate_linker_object(IR_Context *context, Compilation_Unit *unit, Linker_Object *object, u32 *text_index, u32 *data_index);
 
-void emit_obj_file(Compilation_Unit *unit);
+void emit_obj_file(IR_Context *context, Compilation_Unit *unit);
 
 
 typedef void *DLL_Handle;
@@ -110,7 +109,10 @@ void *dll_find_symbol(DLL_Handle handle, const char *name);
 
 typedef void *(JIT_Lookup_Symbol_Callback)(Compilation_Unit *unit, const char *symbol_name);
 
-void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callback cb = nullptr);
+void  jit_generate_code(IR_Context *context, Compilation_Unit *unit, JIT_Lookup_Symbol_Callback cb = nullptr);
+void *jit_lookup_address(IR_Context *context, const String &symbol_name);
+
+void do_jit_and_run_program_main(IR_Context *context, Compilation_Unit *unit, JIT_Lookup_Symbol_Callback cb = nullptr);
 
 } // namespace josh
 

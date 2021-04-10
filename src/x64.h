@@ -8,7 +8,16 @@ namespace josh {
 
 struct X64_Emitter
 {
-    josh::String_Table string_table;
+    struct String_Entry {
+        const char *name = nullptr;
+        u32 data_sec_offset = U32_MAX;
+
+        bool operator== (const String &s) {
+            return name == s;
+        }
+    };
+
+    josh::String_Table<String_Entry> string_table;
 
     Section *data_section;
     Section *code_section;

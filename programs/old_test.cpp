@@ -15,12 +15,12 @@ void old_test() {
     Compilation_Unit unit;
     unit.target = get_host_target();
 
-    Function *printf_func = new Function();
-    printf_func->name = "printf";
-    printf_func->value_type = make_func_type(make_void_type());
+    IR_Context context;
+    IR_Manager *irm = new IR_Manager(&context);
 
-    Function *main_func = new Function();
-    main_func->name = "main";
+    Function *printf_func = irm->make_function("printf", make_func_type(make_void_type()));
+
+    Function *main_func = irm->make_function("main", make_func_type(make_void_type()));
 
     Function *debugbreak = new Function();
     debugbreak->intrinsic_id = Function::DEBUG_BREAK;
@@ -29,8 +29,6 @@ void old_test() {
     Basic_Block *block = new Basic_Block();
     main_func->insert(block);
 
-    IR_Context context;
-    IR_Manager *irm = new IR_Manager(&context);
     irm->set_block(block);
 
     auto _alloca = irm->insert_alloca(irm->i64);
@@ -77,6 +75,6 @@ void old_test() {
     unit.functions.push_back(main_func);
 
 
-    emit_obj_file(&unit);
+    emit_obj_file(&context, &unit);
     // do_jit_and_run_program_main(&unit);
 }

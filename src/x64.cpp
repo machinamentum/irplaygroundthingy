@@ -547,15 +547,16 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
             // copy the string characters into the data section
             assert(constant->string_value.length() <= U32_MAX);
 
-            if (auto entry = emitter->string_table.intern(constant->string_value)) {
-                if (entry->data_sec_offset == U32_MAX) { // New entry
+            if (auto str_id = emitter->string_table.intern(constant->string_value)) {
+                auto &entry = emitter->string_table.lookup(str_id);
+                if (entry.data_sec_offset == U32_MAX) { // New entry
                     size_t length = static_cast<u32>(constant->string_value.length());
                     void *data_target = data_section->data.allocate_bytes_unaligned(length);
                     memcpy(data_target, constant->string_value.data(), length);
                     data_section->data.append_byte(0);
-                    entry->data_sec_offset = data_sec_offset;
+                    entry.data_sec_offset = data_sec_offset;
                 } else {
-                    data_sec_offset = trunc<u32>(entry->data_sec_offset);
+                    data_sec_offset = entry.data_sec_offset;
                 }
             } else {
                 // Empty string, assume at data section offset 0.

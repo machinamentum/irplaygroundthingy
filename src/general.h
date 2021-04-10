@@ -166,8 +166,15 @@ struct Bump_Allocator {
         return out;
     }
 
-    char *append_string(const String& s) {
-        return append(s.data(), (u32)s.length());
+    char *append_string(const String& s, bool null_terminate = false) {
+        if (null_terminate) {
+            char *data = (char *)allocate_bytes_unaligned(s.size() + 1);
+            memcpy(data, s.data(), s.size());
+            data[s.size()] = 0;
+            return data;
+        }
+        else
+            return append(s.data(), (u32)s.length());
     }
 
     void *allocate_bytes_unaligned(size_t size) {
@@ -224,15 +231,10 @@ using Data_Buffer = Bump_Allocator<1024 * 1024>; // 1MB
 typedef u64 String_ID;
 const static String_ID STRING_ID_EMPTY = 0;
 
+template<typename String_Entry = String, bool null_terminate_string_entries = false>
 struct String_Table
 {
     Bump_Allocator<> string_storage;
-
-    struct String_Entry
-    {
-        const char *s = nullptr;
-        size_t data_sec_offset = 0;
-    };
 
     struct Bucket
     {
@@ -265,10 +267,10 @@ struct String_Table
         return v;
     }
 
-    String_Entry *intern(const String &str)
+    String_ID intern(const String &str)
     {
         if (str.length() == 0)
-            return nullptr;
+            return STRING_ID_EMPTY;
 
         u64 key = hash(str);
         u64 bucket = key & (NUM_BUCKETS-1);
@@ -278,14 +280,24 @@ struct String_Table
         for (size_t i = 0; i < b.keys.size(); ++i)
         {
             u64 k = b.keys[i];
-            if (k == key && b.values[i].s == str)
-                return &b.values[i];
+            if (k == key && b.values[i] == str)
+                return b.keys[i];
         }
 
-        b.keys.push_back(key);
-        b.values.push_back(String_Entry{string_storage.append_string(str), U32_MAX});
+        String_ID id = (key & 0xFFFFFFFF) | (b.keys.size() << 32);
+        b.keys.push_back(id);
+        b.values.push_back(String_Entry{string_storage.append_string(str, null_terminate_string_entries)});
         _size += 1;
-        return &b.values[b.values.size()-1];
+        return id;
+    }
+
+    String_Entry &lookup(const String_ID id)
+    {
+        Bucket &b = buckets[id & (NUM_BUCKETS-1)];
+        u64 idx = id >> 32;
+        assert(b.keys.size() > idx && "Key is not an interned string.");
+
+        return b.values.data()[idx];
     }
 };
 

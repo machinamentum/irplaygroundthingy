@@ -1,5 +1,6 @@
 #include "general.h"
 #include "linker_object.h"
+#include "ir.h"
 
 using namespace josh;
 
@@ -125,7 +126,7 @@ const u32 S_ATTR_PURE_INSTRUCTIONS = 0x80000000;
 
 namespace josh {
 
-void emit_macho_file(Linker_Object *object) {
+void emit_macho_file(IR_Context *context, Linker_Object *object) {
     Data_Buffer buffer;
 
     mach_header_64 *header = buffer.allocate_unaligned<mach_header_64>();
@@ -239,12 +240,14 @@ void emit_macho_file(Linker_Object *object) {
     for (auto &symbol : object->symbol_table) {
         auto sym = buffer.allocate_unaligned<nlist_64>();
 
-        if (symbol.linkage_name.length()) {
+        String linkage_name = context->get_string(symbol.linkage_name);
+
+        if (linkage_name.length()) {
             sym->n_strx = string_buffer.size();
             if (!symbol.is_section) string_buffer.append_byte('_');
 
-            assert(symbol.linkage_name.length() <= U32_MAX);
-            string_buffer.append(symbol.linkage_name.data(), static_cast<u32>(symbol.linkage_name.length()));
+            assert(linkage_name.length() <= U32_MAX);
+            string_buffer.append(linkage_name.data(), static_cast<u32>(linkage_name.length()));
             string_buffer.append_byte(0);
         } else {
             sym->n_strx = 0;

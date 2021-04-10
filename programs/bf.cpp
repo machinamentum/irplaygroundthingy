@@ -175,24 +175,18 @@ int main(int argc, char **argv) {
     bf_program = get_file_contents(filename);
 
     IR_Context context;
+    BF_Gen *bfg = new BF_Gen(&context);
 
     Compilation_Unit unit;
     unit.target = get_host_target();
 
-    Function *putchar_func = new Function();
-    putchar_func->name = "putchar";
-    putchar_func->value_type = make_func_type(make_void_type(), {make_integer_type(cell_size)});
+    Function *putchar_func = bfg->make_function("putchar", make_func_type(make_void_type(), {make_integer_type(cell_size)}));
 
-    Function *getchar_func = new Function();
-    getchar_func->name = "getchar";
-    getchar_func->value_type = make_func_type(make_integer_type(1));
+    Function *getchar_func = bfg->make_function("getchar", make_func_type(make_integer_type(1)));
 
-    Function *memset_func = new Function();
-    memset_func->name  = "memset";
-    memset_func->value_type = make_func_type(make_void_type(), {make_pointer_type(make_integer_type(cell_size)), make_integer_type(8), make_integer_type(8)});
+    Function *memset_func = bfg->make_function("memset", make_func_type(make_void_type(), {make_pointer_type(make_integer_type(cell_size)), make_integer_type(8), make_integer_type(8)}));
 
-    Function *main_func = new Function();
-    main_func->name = "main";
+    Function *main_func = bfg->make_function("main", make_func_type(make_void_type()));
 
     unit.functions.push_back(putchar_func);
     unit.functions.push_back(getchar_func);
@@ -202,7 +196,7 @@ int main(int argc, char **argv) {
     Basic_Block *block = new Basic_Block();
     main_func->insert(block);
 
-    BF_Gen *bfg = new BF_Gen(&context);
+
     bfg->bf_program = bf_program;
     bfg->putchar_func = putchar_func;
     bfg->getchar_func = getchar_func;
@@ -223,6 +217,6 @@ int main(int argc, char **argv) {
     bfg->insert_return();
 
     // emit_obj_file(&unit);
-    do_jit_and_run_program_main(&unit);
+    do_jit_and_run_program_main(&context, &unit);
     return 0;
 }

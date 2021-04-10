@@ -12,9 +12,7 @@ int main(int argc, char **argv) {
 }
 
 Function *emit_get_field1_func(IR_Manager *irm, Struct_Type *str) {
-    Function *get = new Function();
-    get->name = "get_field";
-    get->value_type = make_func_type(irm->i32, {str});
+    Function *get = irm->make_function("get_field", make_func_type(irm->i32, {str}));
 
     Basic_Block *block = new Basic_Block();
     get->insert(block);
@@ -39,12 +37,12 @@ void struct_test() {
     Compilation_Unit unit;
     unit.target = get_host_target();
 
-    Function *printf_func = new Function();
-    printf_func->name = "printf";
-    printf_func->value_type = make_func_type(make_void_type(), {}, true);
+    IR_Context context;
+    IR_Manager *irm = new IR_Manager(&context);
 
-    Function *main_func = new Function();
-    main_func->name = "main";
+    Function *printf_func = irm->make_function("printf", make_func_type(make_void_type(), {}, true));
+
+    Function *main_func = irm->make_function("main", make_func_type(make_void_type()));
 
     Function *debugbreak = new Function();
     debugbreak->intrinsic_id = Function::DEBUG_BREAK;
@@ -53,8 +51,7 @@ void struct_test() {
     Basic_Block *block = new Basic_Block();
     main_func->insert(block);
 
-    IR_Context context;
-    IR_Manager *irm = new IR_Manager(&context);
+    
 
     Struct_Type *str_ty = make_struct_type({irm->i64, irm->i64});
     Function *get_field_func = emit_get_field1_func(irm, str_ty);
@@ -89,5 +86,5 @@ void struct_test() {
 
 
     // emit_obj_file(&unit);
-    do_jit_and_run_program_main(&unit);
+    do_jit_and_run_program_main(&context, &unit);
 }

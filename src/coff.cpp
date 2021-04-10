@@ -1,5 +1,6 @@
 #include "general.h"
 #include "linker_object.h"
+#include "ir.h"
 
 using namespace josh;
 
@@ -80,7 +81,7 @@ const u8 IMAGE_SYM_DTYPE_FUNCTION = 0x20;
 
 namespace josh {
 
-void emit_coff_file(Linker_Object *object) {
+void emit_coff_file(IR_Context *context, Linker_Object *object) {
     Data_Buffer buffer;
 
     PE_Coff_Header *header = buffer.allocate_unaligned<PE_Coff_Header>();
@@ -165,15 +166,17 @@ void emit_coff_file(Linker_Object *object) {
     for (auto &symbol : object->symbol_table) {
         PE_Coff_Symbol *sym = (PE_Coff_Symbol *)buffer.allocate_bytes_unaligned(PE_COFF_SYMBOL_SIZE);
 
-        if (symbol.linkage_name.length() <= 8) {
+        String linkage_name = context->get_string(symbol.linkage_name);
+
+        if (linkage_name.length() <= 8) {
             memset(sym->Name.ShortName, 0, 8);
-            memcpy(sym->Name.ShortName, symbol.linkage_name.data(), symbol.linkage_name.length());
+            memcpy(sym->Name.ShortName, linkage_name.data(), linkage_name.length());
         } else {
             sym->Name.LongName.Zeroes = 0;
             sym->Name.LongName.Offset = string_buffer.size() + 4; // +4 to include the string_table_size field itself.
 
-            assert(symbol.linkage_name.length() <= U32_MAX);
-            string_buffer.append(symbol.linkage_name.data(), static_cast<u32>(symbol.linkage_name.length()));
+            assert(linkage_name.length() <= U32_MAX);
+            string_buffer.append(linkage_name.data(), static_cast<u32>(linkage_name.length()));
             string_buffer.append_byte(0);
         }
 

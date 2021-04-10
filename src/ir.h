@@ -13,12 +13,28 @@ struct Instruction;
 struct Basic_Block;
 
 struct IR_Context {
+    String_Table<String, /*null-terminate string entries*/ true> string_interner;
     Bump_Allocator<> node_storage;
 
     template <typename T>
     T *new_node() {
         return node_storage.allocate<T>();
     }
+
+    String_ID intern(const String &str) {
+        return string_interner.intern(str);
+    }
+
+    String get_string(String_ID id) {
+        return string_interner.lookup(id);
+    }
+
+    struct JIT_Symbol_Info {
+        void *entry_ptr;
+    };
+
+    char *text_memory = nullptr;
+    Map<String_ID, JIT_Symbol_Info> jit_symbols;
 };
 
 enum {
@@ -254,7 +270,7 @@ struct Value {
     u32 type;
     Type *value_type;
 
-    String name;
+    String_ID name;
     u32 uses = 0;
     Register *result_stored_in    = nullptr;
     s32 result_spilled_onto_stack = 0;
@@ -436,7 +452,7 @@ struct Basic_Block : Value {
 struct Global_Value : Constant {
     Global_Value() { type = VALUE_GLOBAL; }
 
-    String name;
+    String_ID name;
     u32 symbol_index = 0;
 };
 
@@ -707,6 +723,13 @@ struct IR_Manager {
 
     void set_block(Basic_Block *block) {
         this->block = block;
+    }
+
+    Function *make_function(const String &name, Function_Type *func_type) {
+        Function *func = context->node_storage.allocate<Function>();
+        func->name = context->intern(name);
+        func->value_type = func_type;
+        return func;
     }
 
     Instruction_Alloca *insert_alloca(Type *alloca_type, u32 array_size = 1) {

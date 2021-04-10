@@ -1,6 +1,7 @@
 #include "linker_object.h"
 #include "ir.h"
 #include "x64.h"
+#include "ir.h"
 
 using namespace josh;
 
@@ -56,7 +57,7 @@ u32 get_symbol_index(Linker_Object *object, Global_Value *value) {
 
 // void AArch64_emit_function(Linker_Object *object, Section *code_section, Section *data_section, Function *function);
 
-void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *text_index, u32 *data_index) {
+void generate_linker_object(IR_Context *context, Compilation_Unit *unit, Linker_Object *object, u32 *text_index, u32 *data_index) {
     u32 data_sec_index = 0;
     u32 text_sec_index = 0;
 
@@ -75,7 +76,7 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
         data_sec.is_writable = true;
 
         Symbol sym;
-        sym.linkage_name = "__data";
+        sym.linkage_name = context->intern("__data");
         sym.section_number = data_sec.section_number;
         sym.section_offset = 0;
         sym.is_externally_defined = false;
@@ -102,7 +103,7 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
         text_sec.is_pure_instructions = true;
 
         Symbol sym;
-        sym.linkage_name = "__text";
+        sym.linkage_name = context->intern("__text");
         sym.section_number = text_sec.section_number;
         sym.section_offset = 0;
         sym.is_externally_defined = false;
@@ -136,23 +137,23 @@ void generate_linker_object(Compilation_Unit *unit, Linker_Object *object, u32 *
     printf("Number of .data bytes: %d\n", object->sections[data_sec_index].data.size());
 }
 
-void emit_obj_file(Compilation_Unit *unit) {
+void emit_obj_file(IR_Context *context, Compilation_Unit *unit) {
     Linker_Object object = {};
     object.target = unit->target;
 
-    generate_linker_object(unit, &object, nullptr, nullptr);
+    generate_linker_object(context, unit, &object, nullptr, nullptr);
 
-    void emit_macho_file(Linker_Object *object);
-    void emit_coff_file(Linker_Object *object);
+    void emit_macho_file(IR_Context *context, Linker_Object *object);
+    void emit_coff_file(IR_Context *context, Linker_Object *object);
 
     if (object.target.is_win32()) {
-        emit_coff_file(&object);
+        emit_coff_file(context, &object);
     } else if (object.target.is_macOS()) {
-        emit_macho_file(&object);
+        emit_macho_file(context, &object);
     }
 }
 
-void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callback lookup_sym) {
+void jit_generate_code(IR_Context *context, Compilation_Unit *unit, JIT_Lookup_Symbol_Callback lookup_sym) {
     assert(sizeof(void *) == 8); // 32-bit mode unsupported right now @TODO
 
     // @Cutnpaste from emit_obj_file
@@ -163,7 +164,7 @@ void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callb
     u32 data_sec_index = 0;
     u32 text_sec_index = 0;
 
-    generate_linker_object(unit, &object, &text_sec_index, &data_sec_index);
+    generate_linker_object(context, unit, &object, &text_sec_index, &data_sec_index);
 
     auto code_section = &object.sections[text_sec_index];
     auto data_section = &object.sections[data_sec_index];
@@ -205,7 +206,7 @@ void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callb
     section_memory.push_back(data_memory);
     section_memory.push_back(text_memory);
 
-    Map<String, char *> symbol_map;
+    Map<String_ID, char *> symbol_map;
 
     bool error = false;
 
@@ -228,19 +229,21 @@ void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callb
 
             if (!symbol_map.count(symbol->linkage_name))
             {
+                String linkage_name = context->get_string(symbol->linkage_name);
+
                 if (lookup_sym) {
-                    symbol_target = (char *)lookup_sym(unit, symbol->linkage_name.data());
+                    symbol_target = (char *)lookup_sym(unit, linkage_name.data());
                 }
 
                 if (!symbol_target) {
                     for (auto handle : dlls_to_search) {
-                        symbol_target = (char *)dll_find_symbol(handle, symbol->linkage_name.data());
+                        symbol_target = (char *)dll_find_symbol(handle, linkage_name.data());
                         if (symbol_target) break;
                     }
                 }
 
                 if (!symbol_target) {
-                    printf("Could not find externally-defined symbol '%s'\n", symbol->linkage_name.data());
+                    printf("Could not find externally-defined symbol '%s'\n", linkage_name.data());
                     error = true;
                     continue;
                 }
@@ -261,24 +264,34 @@ void do_jit_and_run_program_main(Compilation_Unit *unit, JIT_Lookup_Symbol_Callb
         }
     }
 
-    Symbol *main_symbol = nullptr;
-    // FIXME horribly inefficient
-    for (auto &sym : object.symbol_table) {
-        if (strcmp(sym.linkage_name.data(), "main") == 0) {
-            main_symbol = &sym;
-        }
-    }
-
-    assert(main_symbol);
-
 #ifdef __APPLE__
     pthread_jit_write_protect_np(true);
     sys_icache_invalidate(text_memory, code_section->data.size());
 #endif
 
-    if (error) return;
+    for (auto &symbol : object.symbol_table) {
+        if (symbol.is_externally_defined)
+            continue;
 
-    void (*prog_main)() = (void (*)())(text_memory + main_symbol->section_offset);
+        auto symbol_sec    = section_memory[symbol.section_number-1];
+        auto symbol_target = symbol_sec + symbol.section_offset;
+
+        context->jit_symbols[symbol.linkage_name] = {symbol_target};
+    }
+}
+
+void *jit_lookup_address(IR_Context *context, const String &symbol_name) {
+    String_ID id = context->intern(symbol_name);
+    if (!id)
+        return nullptr;
+
+    return context->jit_symbols[id].entry_ptr;
+}
+
+void do_jit_and_run_program_main(IR_Context *context, Compilation_Unit *unit, JIT_Lookup_Symbol_Callback lookup_sym) {
+    jit_generate_code(context, unit, lookup_sym);
+
+    void (*prog_main)() = (void (*)())(jit_lookup_address(context, "main"));
     prog_main();
 }
 

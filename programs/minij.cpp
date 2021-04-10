@@ -833,7 +833,7 @@ Value *emit_expression(AST::Expression *expr, AST::Function *function, Compilati
                 target = irm->debugbreak;
             } else {
                 for (auto func : unit->functions) {
-                    if (strcmp(call->call_target_name, func->name.data()) == 0) {
+                    if (strcmp(call->call_target_name, irm->context->get_string(func->name).data()) == 0) {
                         target = func;
                         break;
                     }
@@ -1061,18 +1061,21 @@ int main(int argc, char **argv) {
     for (auto function : functions) {
         // if (strcmp(function->name, "__debugbreak") == 0) continue;
 
-        Function *func = new Function();
-        func->name = function->name;
-
         std::vector<Type *> arg_types;
+        for (auto var : function->arguments) {
+            arg_types.push_back(var->expr_type);
+        }
+
+        auto func_type = make_func_type(function->return_type, to_slice(arg_types), function->is_varargs);
+
+        Function *func = irm->make_function(function->name, func_type);
+
         for (auto var : function->arguments) {
             Argument *arg = make_arg(irm->context, var->expr_type);
             var->storage = arg;
             func->arguments.push_back(arg);
-            arg_types.push_back(var->expr_type);
         }
-
-        func->value_type = make_func_type(function->return_type, to_slice(arg_types), function->is_varargs);
+        
         unit.functions.push_back(func);
 
         if (function->body) {
@@ -1103,10 +1106,10 @@ int main(int argc, char **argv) {
             loaded_dlls.push_back(handle);
         }
 
-        do_jit_and_run_program_main(&unit, symbol_lookup);
+        do_jit_and_run_program_main(&context, &unit, symbol_lookup);
     }
     else
-        emit_obj_file(&unit);
+        emit_obj_file(&context, &unit);
     
     return 0;
 }
