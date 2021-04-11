@@ -309,7 +309,7 @@ void move_imm_to_reg_or_clear(Data_Buffer *dataptr, u64 value, u8 reg) {
     if (value)
         move_imm_to_reg(dataptr, value, reg);
     else
-        xor_reg64_to_reg64(dataptr, reg, reg, 8);
+        xor_reg64_to_reg64(dataptr, reg, reg, 4);
 }
 
 
