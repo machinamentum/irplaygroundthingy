@@ -20,6 +20,12 @@ enum Integer_Register : u8
     RDI = 7,
     R8  = 8,
     R9  = 9,
+    R10 = 10,
+    R11 = 11,
+    R12 = 12,
+    R13 = 13,
+    R14 = 14,
+    R15 = 15,
 };
 
 enum XMM_Register : u8
@@ -456,7 +462,7 @@ void maybe_spill_register(X64_Emitter *emitter, Register *reg) {
         if (inst->result_spilled_onto_stack == 0 && inst->uses) {
             emitter->stack_size += 8; // @TargetInfo
             inst->result_spilled_onto_stack = -emitter->stack_size;
-            move_register_value_to_memory(&emitter->code_section->data, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type);
+            move_register_value_to_memory(&emitter->function_buffer, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type);
         }
 
         reg->currently_holding_result_of_instruction = nullptr;
@@ -474,6 +480,7 @@ Register *claim_register(X64_Emitter *emitter, Register *reg, Value *claimer) {
     }
 
     reg->is_free = false;
+    reg->used    = true;
     return reg;
 }
 
@@ -526,7 +533,7 @@ u8 load_instruction_result(X64_Emitter *emitter, Value *inst, u8 suggested_regis
         reg = get_free_or_suggested_register(emitter, suggested_register, force_use_suggested, inst);
 
         assert(inst->result_spilled_onto_stack != 0);
-        move_memory_value_to_register(&emitter->code_section->data, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type);
+        move_memory_value_to_register(&emitter->function_buffer, reg->machine_reg, addr_register_disp(RBP, inst->result_spilled_onto_stack), inst->value_type);
         return reg->machine_reg;
     }
 }
@@ -564,11 +571,11 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
             }
 
             if (object->use_absolute_addressing) {
-                move_imm64_to_reg64(&code_section->data, data_sec_offset, reg->machine_reg, 8);
+                move_imm64_to_reg64(&emitter->function_buffer, data_sec_offset, reg->machine_reg, 8);
     
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
-                reloc.offset = code_section->data.size() - 8;
+                reloc.offset = emitter->function_buffer.size() - 8;
                 reloc.symbol_index = data_section->symbol_index;
                 reloc.size = 8;
                 reloc.addend = static_cast<u64>(data_sec_offset);
@@ -576,22 +583,22 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
                 code_section->relocations.push_back(reloc);
             } else {
                 // lea data-section-location(%rip), %reg
-                s32 *value = lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
+                s32 *value = lea_rip_relative_into_reg64(&emitter->function_buffer, reg->machine_reg);
                 *value = static_cast<s32>(data_sec_offset);
 
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
                 reloc.is_rip_relative = true;
-                reloc.offset = code_section->data.size() - 4;
+                reloc.offset = emitter->function_buffer.size() - 4;
                 reloc.symbol_index = data_section->symbol_index;
                 reloc.size = 4;
 
                 code_section->relocations.push_back(reloc);
             }
 
-            // if (_register != RAX) move_reg64_to_reg64(&code_section->data, RAX, _register);
+            // if (_register != RAX) move_reg64_to_reg64(&emitter->function_buffer, RAX, _register);
         } else if (constant->constant_type == Constant::INTEGER) {
-            move_imm_to_reg_or_clear(&code_section->data, constant->integer_value, reg->machine_reg);
+            move_imm_to_reg_or_clear(&emitter->function_buffer, constant->integer_value, reg->machine_reg);
         } else if (constant->constant_type == Constant::FLOAT) {
             Register *xmm = get_free_xmm_register(emitter);
             if (!xmm) {
@@ -615,26 +622,26 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
             assert(data_sec_offset >= 0);
 
             if (object->use_absolute_addressing) {
-                move_imm64_to_reg64(&code_section->data, data_sec_offset, reg->machine_reg, 8);
+                move_imm64_to_reg64(&emitter->function_buffer, data_sec_offset, reg->machine_reg, 8);
     
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
-                reloc.offset = code_section->data.size() - 8;
+                reloc.offset = emitter->function_buffer.size() - 8;
                 reloc.symbol_index = data_section->symbol_index;
                 reloc.size = 8;
                 reloc.addend = static_cast<u64>(data_sec_offset);
 
                 code_section->relocations.push_back(reloc);
 
-                move_memory_to_xmm(&code_section->data, xmm->machine_reg, addr_register_disp(reg->machine_reg), constant->value_type->size);
+                move_memory_to_xmm(&emitter->function_buffer, xmm->machine_reg, addr_register_disp(reg->machine_reg), constant->value_type->size);
             } else {
-                s32 *value = move_memory_to_xmm(&code_section->data, xmm->machine_reg, addr_register_disp(RBP), constant->value_type->size);
+                s32 *value = move_memory_to_xmm(&emitter->function_buffer, xmm->machine_reg, addr_register_disp(RBP), constant->value_type->size);
                 *value = static_cast<s32>(data_sec_offset);
 
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
                 reloc.is_rip_relative = true;
-                reloc.offset = code_section->data.size() - 4;
+                reloc.offset = emitter->function_buffer.size() - 4;
                 reloc.symbol_index = data_section->symbol_index;
                 reloc.size = 4;
 
@@ -652,9 +659,9 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
         Register *reg = get_free_or_suggested_register(emitter, suggested_register, force_use_suggested, nullptr);
         reg->is_free = false;
 
-        s32 *value = lea_rip_relative_into_reg64(&code_section->data, reg->machine_reg);
+        s32 *value = lea_rip_relative_into_reg64(&emitter->function_buffer, reg->machine_reg);
 
-        auto offset = code_section->data.size() - 4;
+        auto offset = emitter->function_buffer.size() - 4;
         block->text_locations_needing_addr_fixup.push_back(offset);
 
         block->text_ptrs_for_fixup.push_back((u32 *)value);
@@ -668,14 +675,14 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
         Register *reg = get_free_or_suggested_register(emitter, suggested_register, force_use_suggested, _alloca);
 
         assert(_alloca->stack_offset != 0);
-        lea_into_reg64(&code_section->data, reg->machine_reg, addr_register_disp(RBP, _alloca->stack_offset));
+        lea_into_reg64(&emitter->function_buffer, reg->machine_reg, addr_register_disp(RBP, _alloca->stack_offset));
         return reg->machine_reg;
     } else if (value->type == VALUE_ARGUMENT) {
         auto arg = static_cast<Argument *>(value);
         if (arg->copied_to_stack_offset) {
             Address_Info info = addr_register_disp(RBP, arg->copied_to_stack_offset);
             Register *reg = get_free_or_suggested_register(emitter, suggested_register, force_use_suggested, nullptr);
-            lea_into_reg64(&code_section->data, reg->machine_reg, info);
+            lea_into_reg64(&emitter->function_buffer, reg->machine_reg, info);
             return reg->machine_reg;
         }
 
@@ -764,7 +771,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
             // Register *reg = get_free_or_suggested_register(emitter, RAX, false, inst);
 
             assert(_alloca->stack_offset != 0);
-            // lea_into_reg64(&code_section->data, reg->machine_reg, addr_register_disp(RBP, -_alloca->stack_offset));
+            // lea_into_reg64(&emitter->function_buffer, reg->machine_reg, addr_register_disp(RBP, -_alloca->stack_offset));
             return 0;
         }
 
@@ -781,13 +788,13 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                 maybe_spill_register(emitter, &emitter->register_usage[RCX]);
 
                 if (source != RSI)
-                    move_reg64_to_reg64(&code_section->data, source, RSI);
+                    move_reg64_to_reg64(&emitter->function_buffer, source, RSI);
 
                 if (target != RDI)
-                    move_reg64_to_reg64(&code_section->data, source, RDI);
+                    move_reg64_to_reg64(&emitter->function_buffer, source, RDI);
 
-                move_imm_to_reg_or_clear(&code_section->data, str->size, RCX);
-                rep_move_string(&code_section->data, 1);
+                move_imm_to_reg_or_clear(&emitter->function_buffer, str->size, RCX);
+                rep_move_string(&emitter->function_buffer, 1);
                 return 0;
             }
 
@@ -797,13 +804,13 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
             Type *pointee = static_cast<Pointer_Type *>(store->store_target->value_type)->pointer_to;
             if (constant && constant->is_integer()) {
                 s32 value = trunc<s32>(static_cast<s64>(constant->integer_value));
-                move_imm32_sext_to_memory(&code_section->data, value, target_info, pointee->size);
+                move_imm32_sext_to_memory(&emitter->function_buffer, value, target_info, pointee->size);
             } else {
                 u8 source = maybe_get_instruction_register(store->source_value);
                 if (source == 0xFF) source = emit_load_of_value(emitter, object, code_section, store->source_value, (target_info.machine_reg == RAX) ? RCX : RAX);
 
                 assert(target_info.machine_reg != source);
-                move_register_value_to_memory(&code_section->data, source, target_info, pointee);
+                move_register_value_to_memory(&emitter->function_buffer, source, target_info, pointee);
             }
 
             store->store_target->uses--;
@@ -823,9 +830,9 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
             Register *reg = get_free_or_suggested_register(emitter, RAX, false, inst);
 
             if (load->value_type->as<Struct_Type>())
-                lea_into_reg64(&code_section->data, reg->machine_reg, source);
+                lea_into_reg64(&emitter->function_buffer, reg->machine_reg, source);
             else
-                move_memory_value_to_register(&code_section->data, reg->machine_reg, source, load->value_type);
+                move_memory_value_to_register(&emitter->function_buffer, reg->machine_reg, source, load->value_type);
             return reg->machine_reg;
         }
 
@@ -868,7 +875,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
             }
 
             if (size > 8 && !use_constant_disp) {
-                imul_reg64_with_imm32(&code_section->data, reg->machine_reg, static_cast<s32>(pointee->size), 8);
+                imul_reg64_with_imm32(&emitter->function_buffer, reg->machine_reg, static_cast<s32>(pointee->size), 8);
                 size = 1;
             }
 
@@ -886,9 +893,9 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                 info.scale       = 1;
             }
 
-            if   (source.disp) lea_into_reg64(&code_section->data, reg->machine_reg, info);
+            if   (source.disp) lea_into_reg64(&emitter->function_buffer, reg->machine_reg, info);
             // FIXME this no longer works if gep->offset is nonzero
-            else               add_reg64_to_reg64(&code_section->data, source.machine_reg, reg->machine_reg, gep->value_type->size);
+            else               add_reg64_to_reg64(&emitter->function_buffer, source.machine_reg, reg->machine_reg, gep->value_type->size);
 
             return 0;
         }
@@ -906,7 +913,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
             claim_register(emitter, &emitter->register_usage[RAX], inst);
 
             if (lhs_reg != RAX) {
-                move_reg64_to_reg64(&code_section->data, lhs_reg, RAX);
+                move_reg64_to_reg64(&emitter->function_buffer, lhs_reg, RAX);
                 lhs_reg = RAX;
             }
 
@@ -918,13 +925,13 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
             if (div->value_type->size >= 2) {
                 maybe_spill_register(emitter, &emitter->register_usage[RDX]);
-                if   (div->signed_division) cwd_cdq(&code_section->data, div->value_type->size);
-                else                        xor_reg64_to_reg64(&code_section->data, RDX, RDX, 8);
+                if   (div->signed_division) cwd_cdq(&emitter->function_buffer, div->value_type->size);
+                else                        xor_reg64_to_reg64(&emitter->function_buffer, RDX, RDX, 8);
             } else {
                 // @TODO sign-extend AL value into AH for one-byte division
             }
 
-            div_reg64_with_rax(&code_section->data, rhs_reg, div->value_type->size, div->signed_division);
+            div_reg64_with_rax(&emitter->function_buffer, rhs_reg, div->value_type->size, div->signed_division);
             return 0;
         }
 
@@ -944,9 +951,9 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                 claim_register(emitter, &emitter->register_usage[lhs_reg], inst);
                 s64 value = static_cast<s64>(constant->integer_value);
 
-                if      (inst->type == INSTRUCTION_ADD) add_imm32_to_reg64   (&code_section->data, lhs_reg, trunc<s32>(value), add->value_type->size);
-                else if (inst->type == INSTRUCTION_SUB) sub_imm32_from_reg64 (&code_section->data, lhs_reg, trunc<s32>(value), add->value_type->size);
-                else if (inst->type == INSTRUCTION_MUL) imul_reg64_with_imm32(&code_section->data, lhs_reg, trunc<s32>(value), add->value_type->size);
+                if      (inst->type == INSTRUCTION_ADD) add_imm32_to_reg64   (&emitter->function_buffer, lhs_reg, trunc<s32>(value), add->value_type->size);
+                else if (inst->type == INSTRUCTION_SUB) sub_imm32_from_reg64 (&emitter->function_buffer, lhs_reg, trunc<s32>(value), add->value_type->size);
+                else if (inst->type == INSTRUCTION_MUL) imul_reg64_with_imm32(&emitter->function_buffer, lhs_reg, trunc<s32>(value), add->value_type->size);
                 return 0;
             }
 
@@ -955,9 +962,9 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
             claim_register(emitter, &emitter->register_usage[lhs_reg], inst);
 
-            if      (inst->type == INSTRUCTION_ADD) add_reg64_to_reg64   (&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
-            else if (inst->type == INSTRUCTION_SUB) sub_reg64_from_reg64 (&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
-            else if (inst->type == INSTRUCTION_MUL) imul_reg64_with_reg64(&code_section->data, rhs_reg, lhs_reg, add->value_type->size);
+            if      (inst->type == INSTRUCTION_ADD) add_reg64_to_reg64   (&emitter->function_buffer, rhs_reg, lhs_reg, add->value_type->size);
+            else if (inst->type == INSTRUCTION_SUB) sub_reg64_from_reg64 (&emitter->function_buffer, rhs_reg, lhs_reg, add->value_type->size);
+            else if (inst->type == INSTRUCTION_MUL) imul_reg64_with_reg64(&emitter->function_buffer, rhs_reg, lhs_reg, add->value_type->size);
             return 0;
         }
 
@@ -974,7 +981,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                         assert(false);
                         break;
                     case Function::DEBUG_BREAK:
-                        debugbreak(&code_section->data);
+                        debugbreak(&emitter->function_buffer);
                         break;
                 }
 
@@ -1040,26 +1047,26 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                         u8 next_param = emitter->parameter_registers[integer_param_index];
 
                         Address_Info info = addr_register_disp(result, 8);
-                        move_memory_to_reg(&code_section->data, next_param, info, str->size - 8);
+                        move_memory_to_reg(&emitter->function_buffer, next_param, info, str->size - 8);
                         integer_param_index += 1;
                     }
 
                     Address_Info info = addr_register_disp(result);
-                    move_memory_to_reg(&code_section->data, param_reg, info, str->size > 8 ? 8 : str->size);
+                    move_memory_to_reg(&emitter->function_buffer, param_reg, info, str->size > 8 ? 8 : str->size);
                     p->uses--;
                     continue;
                 }
 
                 if (result != param_reg) {
                     if (is_float)
-                        move_xmm_to_xmm(&code_section->data, result, param_reg);
+                        move_xmm_to_xmm(&emitter->function_buffer, result, param_reg);
                     else
-                        move_reg64_to_reg64(&code_section->data, result, param_reg);
+                        move_reg64_to_reg64(&emitter->function_buffer, result, param_reg);
                 }
 
                 if (is_float && object->target.is_win32() && func_type->is_varargs && i >= func_type->parameters.size()) {
                     // move float value into corresponding integer register slot
-                    movq_xmm_to_reg(&code_section->data, param_reg, int_param_reg, 8);
+                    movq_xmm_to_reg(&emitter->function_buffer, param_reg, int_param_reg, 8);
                 }
 
                 p->uses--;
@@ -1072,39 +1079,39 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
             if (object->target.is_system_v()) {
                 // load number of floating point parameters into %al
-                move_imm_to_reg_or_clear(&code_section->data, num_float_params, RAX);
+                move_imm_to_reg_or_clear(&emitter->function_buffer, num_float_params, RAX);
             }
 
             if (object->use_absolute_addressing) {
-                maybe_spill_register(emitter, &emitter->register_usage[RBX]);
+                maybe_spill_register(emitter, &emitter->register_usage[RCX]);
 
                 // @Cutnpaste move_imm64_to_reg64
-                move_imm64_to_reg64(&code_section->data, 0, RBX);
+                move_imm64_to_reg64(&emitter->function_buffer, 0, RCX);
 
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
-                reloc.offset = code_section->data.size() - 8;
+                reloc.offset = emitter->function_buffer.size() - 8;
                 reloc.symbol_index = get_symbol_index(object, static_cast<Function *>(call->call_target));
                 reloc.size = 8;
                 reloc.addend = 0; // @TODO
 
                 code_section->relocations.push_back(reloc);
 
-                code_section->data.append_byte(REX(1, 0, 0, 0));
-                code_section->data.append_byte(0xFF); // callq reg
-                code_section->data.append_byte(ModRM(0b11, 2, RBX));
+                emitter->function_buffer.append_byte(REX(1, 0, 0, 0));
+                emitter->function_buffer.append_byte(0xFF); // callq reg
+                emitter->function_buffer.append_byte(ModRM(0b11, 2, RCX));
             } else {
-                code_section->data.append_byte(REX(1, 0, 0, 0));
-                code_section->data.append_byte(0xE8); // callq rip-relative
-                // code_section->data.append_byte(ModRM(0b00, 0b000, 0b101));
+                emitter->function_buffer.append_byte(REX(1, 0, 0, 0));
+                emitter->function_buffer.append_byte(0xE8); // callq rip-relative
+                // emitter->function_buffer.append_byte(ModRM(0b00, 0b000, 0b101));
 
                 Relocation reloc;
                 reloc.is_for_rip_call = true;
-                reloc.offset = code_section->data.size();
+                reloc.offset = emitter->function_buffer.size();
                 reloc.symbol_index = get_symbol_index(object, static_cast<Function *>(call->call_target));
                 reloc.size = 4;
 
-                u32 *addr = code_section->data.allocate_unaligned<u32>();
+                u32 *addr = emitter->function_buffer.allocate_unaligned<u32>();
                 *addr = 0;
                 reloc.addend = 0; // @TODO
 
@@ -1117,28 +1124,24 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
         case INSTRUCTION_RETURN: {
             Instruction_Return *ret = static_cast<Instruction_Return *>(inst);
 
-            s32 *stack_size_target = add_imm32_to_reg64(&code_section->data, RSP, 0, 8);
-            emitter->stack_size_fixups.push_back(stack_size_target);
-
             if (ret->return_value) {
                 u8 lhs_reg = maybe_get_instruction_register(ret->return_value);
 
                 if (lhs_reg == 0xFF) lhs_reg = emit_load_of_value(emitter, object, code_section, ret->return_value, RAX, true);
                 ret->return_value->uses--;
 
-                if (lhs_reg != RAX) move_reg64_to_reg64(&code_section->data, lhs_reg, RAX);
+                if (lhs_reg != RAX) move_reg64_to_reg64(&emitter->function_buffer, lhs_reg, RAX);
             }
 
-            // :WastefulPushPops:
-            // pop in reverse order
-            if (object->target.is_win32()) {
-                pop_reg64(&code_section->data, RSI);
-                pop_reg64(&code_section->data, RDI);
-            }
-            pop_reg64(&code_section->data, RBX);
-            pop_reg64(&code_section->data, RBP);
+            if (!emitter->emitting_last_block) { // otherwise fallthrough to epilogue
+                emitter->function_buffer.append_byte(0xE9);
 
-            code_section->data.append_byte(0xC3);
+                auto offset = emitter->function_buffer.size();
+                emitter->epilogue_jump_target_fixups.push_back(offset);
+
+                s32 *value = emitter->function_buffer.allocate_unaligned<s32>();
+                emitter->epilogue_jump_target_fixup_pointers.push_back(value);
+            }
             break;
         }
 
@@ -1156,13 +1159,13 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
             if (branch->condition) {
                 u8 cond = emit_load_of_value(emitter, object, code_section, branch->condition);
-                sub_imm32_from_reg64(&code_section->data, cond, 0, branch->condition->value_type->size);
+                sub_imm32_from_reg64(&emitter->function_buffer, cond, 0, branch->condition->value_type->size);
 
                 maybe_spill_register(emitter, &emitter->register_usage[RAX]);
                 
-                code_section->data.append_byte(0x0F);
-                code_section->data.append_byte(0x85); // jne if cond if true goto true block
-                u32 *jne_disp = code_section->data.allocate_unaligned<u32>();
+                emitter->function_buffer.append_byte(0x0F);
+                emitter->function_buffer.append_byte(0x85); // jne if cond if true goto true block
+                u32 *jne_disp = emitter->function_buffer.allocate_unaligned<u32>();
                 
                 auto failure_target = branch->failure_target;
                 if (failure_target->type == VALUE_BASIC_BLOCK) {
@@ -1170,21 +1173,21 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
                     Basic_Block *block = static_cast<Basic_Block *>(failure_target);
 
-                    code_section->data.append_byte(0xE9);
+                    emitter->function_buffer.append_byte(0xE9);
 
                     // @Cutnpaste from emit_load_of_value
-                    auto offset = code_section->data.size();
+                    auto offset = emitter->function_buffer.size();
                     block->text_locations_needing_addr_fixup.push_back(offset);
 
-                    u32 *value = code_section->data.allocate_unaligned<u32>();
+                    u32 *value = emitter->function_buffer.allocate_unaligned<u32>();
                     block->text_ptrs_for_fixup.push_back(value);
                 } else {
                     *jne_disp = 3; // skip the next jmp instruction
 
                     u8 fail_target = emit_load_of_value(emitter, object, code_section, branch->failure_target);
-                    code_section->data.append_byte(REX(1, 0, 0, 0));
-                    code_section->data.append_byte(0xFF); // jmp reg
-                    code_section->data.append_byte(ModRM(0b11, 4, fail_target & 0b0111));
+                    emitter->function_buffer.append_byte(REX(1, 0, 0, 0));
+                    emitter->function_buffer.append_byte(0xFF); // jmp reg
+                    emitter->function_buffer.append_byte(ModRM(0b11, 4, fail_target & 0b0111));
                 }
             }
 
@@ -1201,20 +1204,20 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                 if (true_target->type == VALUE_BASIC_BLOCK) {
                     Basic_Block *block = static_cast<Basic_Block *>(true_target);
 
-                    code_section->data.append_byte(0xE9);
+                    emitter->function_buffer.append_byte(0xE9);
 
                     // @Cutnpaste from emit_load_of_value
-                    auto offset = code_section->data.size();
+                    auto offset = emitter->function_buffer.size();
                     block->text_locations_needing_addr_fixup.push_back(offset);
 
-                    u32 *value = code_section->data.allocate_unaligned<u32>();
+                    u32 *value = emitter->function_buffer.allocate_unaligned<u32>();
                     block->text_ptrs_for_fixup.push_back(value);
                 } else {
                     u8 target = emit_load_of_value(emitter, object, code_section, branch->true_target);
 
-                    code_section->data.append_byte(REX(1, 0, 0, 0));
-                    code_section->data.append_byte(0xFF); // jmp reg
-                    code_section->data.append_byte(ModRM(0b11, 4, target & 0b0111));
+                    emitter->function_buffer.append_byte(REX(1, 0, 0, 0));
+                    emitter->function_buffer.append_byte(0xFF); // jmp reg
+                    emitter->function_buffer.append_byte(ModRM(0b11, 4, target & 0b0111));
                 }
             }
 
@@ -1237,6 +1240,13 @@ Register make_reg(u8 machine_reg, bool is_free = true) {
     return reg;
 }
 
+bool is_callee_saved(const Target &target, u8 reg) {
+    if (target.is_win32())
+        return (reg >= RBX && reg <= RDI) || (reg >= R12 && reg <= R15);
+    else
+        return reg == RBX || reg == RSP || reg == RBP || (reg >= R12 && reg <= R15);
+}
+
 namespace josh {
 
 void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *function) {
@@ -1249,13 +1259,16 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
 
     Section *code_section = emitter->code_section;
 
+    emitter->function_buffer.clear();
     emitter->register_usage.clear();
     emitter->xmm_usage.clear();
     emitter->parameter_registers.clear();
     emitter->stack_size_fixups.clear();
     emitter->stack_size = 0;
     emitter->largest_call_stack_adjustment = 0;
+    emitter->emitting_last_block = false;
 
+    size_t relocations_start = code_section->relocations.size();
 
     u32 symbol_index = get_symbol_index(object, function);
     Symbol *sym = &object->symbol_table[symbol_index];
@@ -1264,7 +1277,7 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
     if (sym->is_externally_defined) return;
 
     if (!sym->is_externally_defined) sym->section_number = code_section->section_number;
-    sym->section_offset = code_section->data.size();
+    sym->section_offset = emitter->code_section->data.size();
 
     if (object->target.is_win32()) {
         emitter->parameter_registers.push_back(RCX);
@@ -1295,20 +1308,6 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
         emitter->xmm_usage.push_back(make_reg(i));
     }
 
-    // :WastefulPushPops: @Cleanup pushing all the registers we may need is
-    // a bit excessive and wasteful.
-    push_reg64(&code_section->data, RBP);
-    push_reg64(&code_section->data, RBX);
-
-    if (object->target.is_win32()) {
-        push_reg64(&code_section->data, RDI);
-        push_reg64(&code_section->data, RSI);
-    }
-
-    // R12, R13, R14, and R15 must also be callee-saved in both conventions
-
-    move_reg64_to_reg64(&code_section->data, RSP, RBP);
-
     u32 reg_index = 0;
     for (u32 i = 0; i < function->arguments.size(); ++i) {
         Argument *arg = function->arguments[i];
@@ -1318,12 +1317,12 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
             emitter->stack_size += str->size;
 
             Address_Info info = addr_register_disp(RBP, -emitter->stack_size);
-            move_reg_to_memory(&code_section->data, emitter->parameter_registers[reg_index], info, str->size > 8 ? 8 : str->size);
+            move_reg_to_memory(&emitter->function_buffer, emitter->parameter_registers[reg_index], info, str->size > 8 ? 8 : str->size);
             reg_index += 1;
 
             if (str->size > 8) {
                 info.disp += 8;
-                move_reg_to_memory(&code_section->data, emitter->parameter_registers[reg_index], info, str->size - 8);
+                move_reg_to_memory(&emitter->function_buffer, emitter->parameter_registers[reg_index], info, str->size - 8);
                 reg_index += 1;
             }
 
@@ -1348,47 +1347,92 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
         }
     }
 
+    for (size_t i = 0; i < function->blocks.size(); ++i) {
+        auto block = function->blocks[i];
 
-    s32 *stack_size_target = sub_imm32_from_reg64(&code_section->data, RSP, 0, 8);
-    emitter->stack_size_fixups.push_back(stack_size_target);
+        assert(block->has_terminator());
+        block->text_location = emitter->function_buffer.size();
+
+        emitter->emitting_last_block = (i == function->blocks.size()-1);
+
+        for (auto inst : block->instructions) {
+            emit_instruction(emitter, object, function, block, code_section, inst);
+        }
+    }
+
+    // block text locations need to be offset by the end of the function prologue
+    // relocation offsets need to be offset by end of the function prologue
+
+    emitter->stack_size += emitter->largest_call_stack_adjustment;
+    // Ensure stack is 16-byte aligned.
+    emitter->stack_size = ensure_aligned(emitter->stack_size, 16);
+    assert((emitter->stack_size & (0xF)) == 0);
+
+    size_t num_push_pops = 0;
+    bool pushed_rbp = false;
+
+    if (emitter->stack_size != 0) {
+        push_reg64(&emitter->code_section->data, RBP);
+        num_push_pops += 1;
+        pushed_rbp = true;
+    }
+
+    for (size_t i = 0; i < emitter->register_usage.size(); ++i) {
+        auto reg = &emitter->register_usage[i];
+        if (reg->used && is_callee_saved(object->target, reg->machine_reg)) {
+            push_reg64(&emitter->code_section->data, reg->machine_reg);
+            num_push_pops += 1;
+        }
+    }
+
+    bool offset_push = false;
+    if (num_push_pops % 2 == 0) {
+        if (emitter->stack_size)
+            emitter->stack_size += 8;
+        else {
+            offset_push = true;
+            push_reg64(&emitter->code_section->data, RAX); // push a reg so we align stack properly without needing RBP pushed and RSP modified
+        }
+    }
+
+    if (emitter->stack_size != 0) {
+        move_reg64_to_reg64(&emitter->code_section->data, RSP, RBP);
+        s32 *stack_size_target = sub_imm32_from_reg64(&emitter->code_section->data, RSP, 0, 8);
+        emitter->stack_size_fixups.push_back(stack_size_target);
+    }
 
     // Touch stack pages from top to bottom
     // to release stack pages from the page guard system.
+    // TODO we can probably simplify this by removing the loop
+    // and emitting one mov instruction per stack page now that
+    // we know the stack size post-function-body-generation
     if (object->target.is_win32()) {
-        s32 *move_stack_size_to_rax = (s32 *)move_imm64_to_reg64(&code_section->data, 0, RAX, 4); // 4-byte immediate
+        s32 *move_stack_size_to_rax = (s32 *)move_imm64_to_reg64(&emitter->code_section->data, 0, RAX, 4); // 4-byte immediate
         emitter->stack_size_fixups.push_back(move_stack_size_to_rax);
 
-        auto loop_start = code_section->data.size();
-        sub_imm32_from_reg64(&code_section->data, RAX, 4096, 8);
+        auto loop_start = emitter->code_section->data.size();
+        sub_imm32_from_reg64(&emitter->code_section->data, RAX, 4096, 8);
 
 
         // @Cutnpaste from move_reg_to_memory
-        auto dataptr = &code_section->data;
+        auto dataptr = &emitter->code_section->data;
         dataptr->append_byte(REX(1, BIT3(RAX), 0, BIT3(RSP)));
 
         dataptr->append_byte(0x89);
         dataptr->append_byte(ModRM(MOD_INDIRECT_NO_DISP, LOW3(RAX), LOW3(RSP)));
         dataptr->append_byte(SIB(0, RAX, RSP));
 
-        code_section->data.append_byte(0x0F);
-        code_section->data.append_byte(0x8C); // jl if RAX < 0 break
-        u32 *disp = code_section->data.allocate_unaligned<u32>();
+        emitter->code_section->data.append_byte(0x0F);
+        emitter->code_section->data.append_byte(0x8C); // jl if RAX < 0 break
+        u32 *disp = emitter->code_section->data.allocate_unaligned<u32>();
         *disp = 5; // skip the next jmp instruction
 
-        code_section->data.append_byte(0xE9); // jmp loop start
-        disp = code_section->data.allocate_unaligned<u32>();
-        *disp = (loop_start - code_section->data.size());
+        emitter->code_section->data.append_byte(0xE9); // jmp loop start
+        disp = emitter->code_section->data.allocate_unaligned<u32>();
+        *disp = (loop_start - emitter->code_section->data.size());
     }
 
-
-    for (auto block : function->blocks) {
-        assert(block->has_terminator());
-        block->text_location = code_section->data.size();
-
-        for (auto inst : block->instructions) {
-            emit_instruction(emitter, object, function, block, code_section, inst);
-        }
-    }
+    size_t text_offset = emitter->code_section->data.size();
 
     for (auto block : function->blocks) {
         for (u64 i = 0; i < block->text_locations_needing_addr_fixup.size(); ++i) {
@@ -1399,16 +1443,45 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
         }
     }
 
-    emitter->stack_size += emitter->largest_call_stack_adjustment;
-    // Ensure stack is 16-byte aligned.
-    emitter->stack_size = ensure_aligned(emitter->stack_size, 16);
-    assert((emitter->stack_size & (15)) == 0);
-    emitter->stack_size += 8;
+    emitter->code_section->data.append(&emitter->function_buffer);
 
+    if (emitter->stack_size != 0) {
+        s32 *stack_size_target = add_imm32_to_reg64(&emitter->code_section->data, RSP, 0, 8);
+        emitter->stack_size_fixups.push_back(stack_size_target);
+    }
 
     assert(emitter->stack_size >= 0);
     for (auto fixup : emitter->stack_size_fixups) {
         *fixup = emitter->stack_size;
+    }
+
+    size_t epilogue_start_offset = emitter->code_section->data.size();
+
+    for (size_t i = 0; i < emitter->epilogue_jump_target_fixups.size(); ++i) {
+        size_t location = text_offset + emitter->epilogue_jump_target_fixups[i];
+        s32 *addr = emitter->epilogue_jump_target_fixup_pointers[i];
+
+        *addr = static_cast<s32>(epilogue_start_offset - (location + 4));
+    }
+
+    if (offset_push) {
+        pop_reg64(&emitter->code_section->data, RCX); // pop the stack alignment value into a caller-saved register
+    }
+
+    // reverse order pop
+    for (size_t i = emitter->register_usage.size(); i > 0; --i) {
+        auto reg = &emitter->register_usage[i-1];
+        if (reg->used && is_callee_saved(object->target, reg->machine_reg))
+             pop_reg64(&emitter->code_section->data, reg->machine_reg);
+    }
+
+    if (pushed_rbp)
+        pop_reg64(&emitter->code_section->data, RBP);
+
+    emitter->code_section->data.append_byte(0xC3); // retq
+
+    for (size_t i = relocations_start; i < code_section->relocations.size(); ++i) {
+        code_section->relocations[i].offset += text_offset;
     }
 }
 

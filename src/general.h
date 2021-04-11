@@ -126,6 +126,10 @@ struct Bump_Allocator {
     };
 
     ~Bump_Allocator() {
+        clear();
+    }
+
+    void clear() {
         for (auto &c : chunks)
             free(c.data);
 

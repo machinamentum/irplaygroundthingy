@@ -263,6 +263,7 @@ bool types_match(Type *a, Type *b) {
 struct Register {
     u8 machine_reg;
     bool is_free = true;
+    bool used    = false;
     Value *currently_holding_result_of_instruction = nullptr;
 };
 

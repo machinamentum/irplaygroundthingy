@@ -216,7 +216,7 @@ int main(int argc, char **argv) {
 
     bfg->insert_return();
 
-    // emit_obj_file(&unit);
+    // emit_obj_file(&context, &unit);
     do_jit_and_run_program_main(&context, &unit);
     return 0;
 }

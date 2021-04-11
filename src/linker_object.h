@@ -28,13 +28,13 @@ struct Target {
     OS os;
     Cpu_Arch cpuarch;
 
-    bool is_win32() { return os == WINDOWS; }
-    bool is_macOS() { return os == MACOSX;  }
-    bool is_system_v() { return os == MACOSX || os == LINUX; }
-    bool is_c() { return os == C_VIRTUAL_OS; }
+    bool is_win32() const { return os == WINDOWS; }
+    bool is_macOS() const { return os == MACOSX;  }
+    bool is_system_v() const { return os == MACOSX || os == LINUX; }
+    bool is_c() const { return os == C_VIRTUAL_OS; }
 
-    bool is_x64() { return cpuarch == CPU_X86_64; }
-    bool is_aarch64() { return cpuarch == CPU_AAarch64; }
+    bool is_x64() const { return cpuarch == CPU_X86_64; }
+    bool is_aarch64() const { return cpuarch == CPU_AAarch64; }
 };
 
 inline
