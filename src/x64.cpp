@@ -7,6 +7,7 @@ using namespace josh;
 
 #include <stdio.h>
 
+#define REG_WIDTH 8
 
 enum Integer_Register : u8
 {
@@ -263,6 +264,8 @@ u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 value, u8 reg, u32 size = 8) 
 }
 
 void move_imm32_sext_to_memory(Data_Buffer *dataptr, s32 value, Address_Info info, u32 size) {
+    //FIXME the name of this function is misleading because only the size = 8 variant does sign extension
+    // We can also save a byte if size = 4 I think, since we don't need to REX prefix unless we need BIT3(reg) registers
     u8 op = (size == 1) ? 0xC6 : 0xC7;
     _two_register_operand_instruction(dataptr, op, false, RAX, info, size);
 
@@ -328,12 +331,19 @@ void lea_into_reg64(Data_Buffer *dataptr, u8 dst, Address_Info source) {
     _two_register_operand_instruction(dataptr, 0x8D, false, dst, source, 8);
 }
 
-void pop_reg64(Data_Buffer *dataptr, u8 reg, u8 size = 8) {
-    _single_register_operand_instruction(dataptr, 0x58, reg, size);
+void _push_pop_impl(Data_Buffer *dataptr, u8 opcode, u8 reg, u8 size) {
+    if (size == REG_WIDTH && BIT3(reg) == 0) // optimal path, one instruction push/pop
+        dataptr->append_byte(opcode + LOW3(reg));
+    else
+        _single_register_operand_instruction(dataptr, 0x58, reg, size);
 }
 
-void push_reg64(Data_Buffer *dataptr, u8 reg, u8 size = 8) {
-    _single_register_operand_instruction(dataptr, 0x50, reg, size);
+void pop(Data_Buffer *dataptr, u8 reg, u8 size = 8) {
+    _push_pop_impl(dataptr, 0x58, reg, size);
+}
+
+void push(Data_Buffer *dataptr, u8 reg, u8 size = 8) {
+    _push_pop_impl(dataptr, 0x50, reg, size);
 }
 
 s32 *_mathop_imm32_reg64(Data_Buffer *dataptr, u8 reg, s32 value, u32 size, u8 op_select) {
@@ -1182,16 +1192,22 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                     u32 *value = emitter->function_buffer.allocate_unaligned<u32>();
                     block->text_ptrs_for_fixup.push_back(value);
                 } else {
-                    *jne_disp = 3; // skip the next jmp instruction
+                    *jne_disp = 2; // skip the next jmp instruction
 
                     u8 fail_target = emit_load_of_value(emitter, object, code_section, branch->failure_target);
-                    emitter->function_buffer.append_byte(REX(1, 0, 0, 0));
+                    if (BIT3(fail_target)) {
+                        *jne_disp += 1;
+                        emitter->function_buffer.append_byte(REX(1, 0, 0, BIT3(fail_target)));
+                    }
+
                     emitter->function_buffer.append_byte(0xFF); // jmp reg
-                    emitter->function_buffer.append_byte(ModRM(0b11, 4, fail_target & 0b0111));
+                    emitter->function_buffer.append_byte(ModRM(0b11, 4, LOW3(fail_target)));
                 }
             }
 
             Basic_Block *next_block = nullptr;
+            // FIXME blocks should just know their insertion position
+            // TODO maybe reoder blocks to optimize this
             for (u64 i = 0; i < function->blocks.size()-1; ++i) {
                 if (function->blocks[i] == current_block) {
                     next_block = function->blocks[i+1];
@@ -1372,7 +1388,7 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
     bool pushed_rbp = false;
 
     if (emitter->stack_size != 0) {
-        push_reg64(&emitter->code_section->data, RBP);
+        push(&emitter->code_section->data, RBP);
         num_push_pops += 1;
         pushed_rbp = true;
     }
@@ -1380,7 +1396,7 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
     for (size_t i = 0; i < emitter->register_usage.size(); ++i) {
         auto reg = &emitter->register_usage[i];
         if (reg->used && is_callee_saved(object->target, reg->machine_reg)) {
-            push_reg64(&emitter->code_section->data, reg->machine_reg);
+            push(&emitter->code_section->data, reg->machine_reg);
             num_push_pops += 1;
         }
     }
@@ -1391,7 +1407,7 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
             emitter->stack_size += 8;
         else {
             offset_push = true;
-            push_reg64(&emitter->code_section->data, RAX); // push a reg so we align stack properly without needing RBP pushed and RSP modified
+            push(&emitter->code_section->data, RAX); // push a reg so we align stack properly without needing RBP pushed and RSP modified
         }
     }
 
@@ -1465,18 +1481,18 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
     }
 
     if (offset_push) {
-        pop_reg64(&emitter->code_section->data, RCX); // pop the stack alignment value into a caller-saved register
+        pop(&emitter->code_section->data, RCX); // pop the stack alignment value into a caller-saved register
     }
 
     // reverse order pop
     for (size_t i = emitter->register_usage.size(); i > 0; --i) {
         auto reg = &emitter->register_usage[i-1];
         if (reg->used && is_callee_saved(object->target, reg->machine_reg))
-             pop_reg64(&emitter->code_section->data, reg->machine_reg);
+             pop(&emitter->code_section->data, reg->machine_reg);
     }
 
     if (pushed_rbp)
-        pop_reg64(&emitter->code_section->data, RBP);
+        pop(&emitter->code_section->data, RBP);
 
     emitter->code_section->data.append_byte(0xC3); // retq
 
