@@ -855,7 +855,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                 assert(con->constant_type == Constant::INTEGER);
 
                 use_constant_disp = true;
-                constant_disp = con->integer_value;
+                constant_disp = trunc<s32>(con->integer_value);
             }
 
             u8 target = 0xFF;
@@ -899,7 +899,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                 info.scale       = (u8) size;
             } else {
                 info.machine_reg = source.machine_reg;
-                info.disp        = (source.disp + gep->offset + constant_disp) * size;
+                info.disp        = (source.disp + gep->offset + constant_disp) * static_cast<s32>(size);
                 info.scale       = 1;
             }
 

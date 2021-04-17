@@ -49,6 +49,8 @@ library at this point.
 #include "ir.h"
 #include "print_ir.h"
 
+#define UNUSED(x) ((void)(x))
+
 using namespace josh;
 
 typedef uint64_t u64;
@@ -969,6 +971,7 @@ Array_Slice<Type *> to_slice(std::vector<Type *> &v) {
 std::vector<DLL_Handle> loaded_dlls;
 
 void *symbol_lookup(Compilation_Unit *unit, const char *symbol_name) {
+    UNUSED(unit);
     for (auto dll: loaded_dlls) {
         assert(dll);
         void *result = dll_find_symbol(dll, symbol_name);

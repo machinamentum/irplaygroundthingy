@@ -2,11 +2,15 @@
 #include "linker_object.h"
 #include "ir.h"
 
+#define UNUSED(x) ((void)(x))
+
 using namespace josh;
 
 void old_test();
 
 int main(int argc, char **argv) {
+    UNUSED(argc);
+    UNUSED(argv);
     old_test();
     return 0;
 }

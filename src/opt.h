@@ -1,6 +1,6 @@
 
-#ifndef X64_OPT_H
-#define X64_OPT_H
+#ifndef JOSH_OPT_H
+#define JOSH_OPT_H
 
 #include "general.h"
 #include "ir.h"

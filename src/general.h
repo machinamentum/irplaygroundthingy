@@ -1,6 +1,6 @@
 
-#ifndef GENERAL_H
-#define GENERAL_H
+#ifndef JOSH_GENERAL_H
+#define JOSH_GENERAL_H
 
 
 #include <stdint.h>

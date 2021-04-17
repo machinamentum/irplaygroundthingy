@@ -1,6 +1,6 @@
 
-#ifndef X64_EMITTER
-#define X64_EMITTER
+#ifndef JOSH_X64_EMITTER
+#define JOSH_X64_EMITTER
 
 #include "general.h"
 

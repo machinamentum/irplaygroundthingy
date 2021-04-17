@@ -126,19 +126,19 @@ void generate_linker_object(IR_Context *context, Compilation_Unit *unit, Linker_
         for (auto func : unit->functions)
             x64_emit_function(&emitter, object, func);
 
-        for (const auto [target, func] : emitter.rip_call_fixup_targets) {
+        for (const auto &[target, func] : emitter.rip_call_fixup_targets) {
             s32 *addr = emitter.code_section->data.get_pointer_from_offset<s32>(target);
-            *addr = static_cast<s32>(emitter.function_text_locations[func]) - target - 4;
+            *addr = static_cast<s32>(emitter.function_text_locations[func] - target - 4);
         }
 
         u32 text_symbol_index = object->sections[text_sec_index].symbol_index;
-        for (const auto [target, func] : emitter.absolute_call_fixup_targets) {
+        for (const auto &[target, func] : emitter.absolute_call_fixup_targets) {
             size_t func_offset = emitter.function_text_locations[func];
 
             // Absolute address use still needs to use a relocation because the .text may be moved to anywhere
             Relocation reloc;
             reloc.is_for_rip_call = false;
-            reloc.offset = target;
+            reloc.offset = trunc<u32>(target);
             reloc.symbol_index = text_symbol_index;
             reloc.size = 8;
             reloc.addend = 0; // @TODO

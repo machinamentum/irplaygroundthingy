@@ -1,6 +1,6 @@
 
-#ifndef IR_H
-#define IR_H
+#ifndef JOSH_IR_H
+#define JOSH_IR_H
 
 #include "linker_object.h"
 
@@ -122,7 +122,7 @@ struct Struct_Type : Type {
     u32 offset_of(size_t index) {
         assert(index < members.size());
 
-        size_t offset_within_struct = 0;
+        u32 offset_within_struct = 0;
         for (size_t i = 0; i < index; ++i) {
             auto m = members[i];
 
@@ -409,7 +409,7 @@ struct Instruction_GEP : Instruction {
 
     Value *pointer_value = nullptr;
     Value *index         = nullptr;
-    u32 offset = 0;
+    s32 offset = 0;
     bool is_struct_member_ptr = false;
 };
 
@@ -526,10 +526,10 @@ Instruction_Branch *make_branch(IR_Context *context, Value *condition_or_null, V
 }
 
 
-struct Gep_Info { Type *ty; size_t offset; bool is_struct_member_ptr; };
+struct Gep_Info { Type *ty; s32 offset; bool is_struct_member_ptr; };
 
 inline
-Gep_Info get_gep_value_type_and_offset(Type *ty, const Array_Slice<Value *> &indices, size_t depth, size_t offset = 0, bool is_member = false) {
+Gep_Info get_gep_value_type_and_offset(Type *ty, const Array_Slice<Value *> &indices, size_t depth, s32 offset = 0, bool is_member = false) {
     if (depth == indices.size())
         return {make_pointer_type(ty), offset, is_member};
 
@@ -539,10 +539,10 @@ Gep_Info get_gep_value_type_and_offset(Type *ty, const Array_Slice<Value *> &ind
         assert(in->constant_type == Constant::INTEGER);
         assert(in->integer_value >= 0 && in->integer_value < str->members.size());
 
-        size_t offset_within_struct = str->offset_of(in->integer_value);
+        u32 offset_within_struct = str->offset_of(in->integer_value);
         Type *mem = str->members[in->integer_value];
 
-        return get_gep_value_type_and_offset(mem, indices, depth + 1, offset + offset_within_struct, true);
+        return get_gep_value_type_and_offset(mem, indices, depth + 1, offset + static_cast<s32>(offset_within_struct), true);
     } else if (Pointer_Type *ptr = ty->as<Pointer_Type>()) {
         assert(depth == 0);
         return get_gep_value_type_and_offset(ptr->pointer_to, indices, depth + 1, offset);
@@ -816,7 +816,7 @@ struct IR_Manager {
 
             if (signed_division)
                 // FIXME this should check the size of the incoming integer type and properly cast up if smaller than 64 bits.
-                return make_integer_constant(context, (s64)clhs->integer_value / (s64)crhs->integer_value, lhs->value_type);
+                return make_integer_constant(context, static_cast<u64>((s64)clhs->integer_value / (s64)crhs->integer_value), lhs->value_type);
             else
                 return make_integer_constant(context, clhs->integer_value / crhs->integer_value, lhs->value_type);
         }
