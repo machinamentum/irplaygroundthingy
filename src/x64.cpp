@@ -1107,11 +1107,9 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
 
                 code_section->relocations.push_back(reloc);
 
-                emitter->function_buffer.append_byte(REX(1, 0, 0, 0));
                 emitter->function_buffer.append_byte(0xFF); // callq reg
                 emitter->function_buffer.append_byte(ModRM(0b11, 2, RCX));
             } else {
-                emitter->function_buffer.append_byte(REX(1, 0, 0, 0));
                 emitter->function_buffer.append_byte(0xE8); // callq rip-relative
                 // emitter->function_buffer.append_byte(ModRM(0b00, 0b000, 0b101));
 
@@ -1231,9 +1229,11 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                 } else {
                     u8 target = emit_load_of_value(emitter, object, code_section, branch->true_target);
 
-                    emitter->function_buffer.append_byte(REX(1, 0, 0, 0));
+                    if (BIT3(target))
+                        emitter->function_buffer.append_byte(REX(1, 0, 0, BIT3(target)));
+
                     emitter->function_buffer.append_byte(0xFF); // jmp reg
-                    emitter->function_buffer.append_byte(ModRM(0b11, 4, target & 0b0111));
+                    emitter->function_buffer.append_byte(ModRM(0b11, 4, LOW3(target)));
                 }
             }
 
