@@ -470,6 +470,13 @@ struct Function : Global_Value {
     };
     u32 intrinsic_id = NOT_INTRINSIC;
 
+    enum Linkage {
+        EXTERNAL,
+        INTERNAL,
+    };
+
+    Linkage linkage = EXTERNAL;
+
     Array<Argument *> arguments;
     Array<Basic_Block *> blocks;
 

@@ -1092,20 +1092,27 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                 move_imm_to_reg_or_clear(&emitter->function_buffer, num_float_params, RAX);
             }
 
+            bool has_internal_definition = function_target->blocks.size() != 0;
+
             if (object->use_absolute_addressing) {
                 maybe_spill_register(emitter, &emitter->register_usage[RCX]);
 
                 // @Cutnpaste move_imm64_to_reg64
                 move_imm64_to_reg64(&emitter->function_buffer, 0, RCX);
 
-                Relocation reloc;
-                reloc.is_for_rip_call = false;
-                reloc.offset = emitter->function_buffer.size() - 8;
-                reloc.symbol_index = get_symbol_index(object, static_cast<Function *>(call->call_target));
-                reloc.size = 8;
-                reloc.addend = 0; // @TODO
+                if (has_internal_definition) {
+                    emitter->absolute_call_fixup_targets.emplace_back(emitter->function_buffer.size() - 8, function_target);
+                } else {
+                    Relocation reloc;
+                    reloc.is_for_rip_call = false;
+                    reloc.offset = emitter->function_buffer.size() - 8;
+                    reloc.symbol_index = get_symbol_index(object, function_target);
+                    reloc.size = 8;
+                    reloc.addend = 0; // @TODO
 
-                code_section->relocations.push_back(reloc);
+
+                    code_section->relocations.push_back(reloc);
+                }
 
                 emitter->function_buffer.append_byte(0xFF); // callq reg
                 emitter->function_buffer.append_byte(ModRM(0b11, 2, RCX));
@@ -1113,17 +1120,20 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                 emitter->function_buffer.append_byte(0xE8); // callq rip-relative
                 // emitter->function_buffer.append_byte(ModRM(0b00, 0b000, 0b101));
 
-                Relocation reloc;
-                reloc.is_for_rip_call = true;
-                reloc.offset = emitter->function_buffer.size();
-                reloc.symbol_index = get_symbol_index(object, static_cast<Function *>(call->call_target));
-                reloc.size = 4;
-
-                u32 *addr = emitter->function_buffer.allocate_unaligned<u32>();
+                s32 *addr = emitter->function_buffer.allocate_unaligned<s32>();
                 *addr = 0;
-                reloc.addend = 0; // @TODO
 
-                code_section->relocations.push_back(reloc);
+                if (has_internal_definition) {
+                    emitter->rip_call_fixup_targets.emplace_back(emitter->function_buffer.size() - 4, function_target);
+                } else {
+                    Relocation reloc;
+                    reloc.is_for_rip_call = true;
+                    reloc.offset = emitter->function_buffer.size() - 4;
+                    reloc.symbol_index = get_symbol_index(object, function_target);
+                    reloc.size = 4;
+                    reloc.addend = 0; // @TODO
+                    code_section->relocations.push_back(reloc);
+                }
             }
 
             return RAX;
@@ -1284,16 +1294,26 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
     emitter->largest_call_stack_adjustment = 0;
     emitter->emitting_last_block = false;
 
-    size_t relocations_start = code_section->relocations.size();
+    bool is_externally_defined = (function->blocks.size() == 0);
 
-    u32 symbol_index = get_symbol_index(object, function);
-    Symbol *sym = &object->symbol_table[symbol_index];
-    sym->is_function = true;
-    sym->is_externally_defined = (function->blocks.size() == 0);
-    if (sym->is_externally_defined) return;
+    if (is_externally_defined)
+        assert(function->linkage == Function::Linkage::EXTERNAL);
 
-    if (!sym->is_externally_defined) sym->section_number = code_section->section_number;
-    sym->section_offset = emitter->code_section->data.size();
+    if (function->linkage == Function::Linkage::EXTERNAL) {
+        u32 symbol_index = get_symbol_index(object, function);
+        Symbol *sym = &object->symbol_table[symbol_index];
+        sym->is_function = true;
+        sym->is_externally_defined = is_externally_defined;
+
+        if (!sym->is_externally_defined) {
+            sym->section_number = code_section->section_number;
+            sym->section_offset = emitter->code_section->data.size();
+        }
+    }
+
+    if (is_externally_defined) return;
+
+    emitter->function_text_locations[function] = emitter->code_section->data.size();
 
     if (object->target.is_win32()) {
         emitter->parameter_registers.push_back(RCX);
@@ -1323,6 +1343,10 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
     for (u8 i = 0; i <= XMM15; ++i) {
         emitter->xmm_usage.push_back(make_reg(i));
     }
+
+    size_t relocations_start = code_section->relocations.size();
+    size_t rip_fixups_start  = emitter->rip_call_fixup_targets.size();
+    size_t abs_fixups_start  = emitter->absolute_call_fixup_targets.size();
 
     u32 reg_index = 0;
     for (u32 i = 0; i < function->arguments.size(); ++i) {
@@ -1498,6 +1522,14 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
 
     for (size_t i = relocations_start; i < code_section->relocations.size(); ++i) {
         code_section->relocations[i].offset += text_offset;
+    }
+
+    for (size_t i = rip_fixups_start; i < emitter->rip_call_fixup_targets.size(); ++i) {
+        emitter->rip_call_fixup_targets[i].first += text_offset;
+    }
+
+    for (size_t i = abs_fixups_start; i < emitter->absolute_call_fixup_targets.size(); ++i) {
+        emitter->absolute_call_fixup_targets[i].first += text_offset;
     }
 }
 

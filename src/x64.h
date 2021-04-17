@@ -17,8 +17,15 @@ struct X64_Emitter
         }
     };
 
-    bool emitting_last_block = false;
+    // Whole program data
     String_Table<String_Entry> string_table;
+    Array<Pair<size_t, Function *>> absolute_call_fixup_targets;
+    Array<Pair<size_t, Function *>> rip_call_fixup_targets;
+    Map<Function *, size_t> function_text_locations;
+
+    // Per function data below
+
+    bool emitting_last_block = false;
 
     Section *data_section;
     Section *code_section;

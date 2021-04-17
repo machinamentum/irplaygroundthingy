@@ -221,12 +221,27 @@ struct Bump_Allocator {
         append(&byte, 1);
     }
 
-    u32 size() {
+    u32 size() const {
         u32 size = 0;
         for (auto &c : chunks) {
             size += c.count;
         }
         return size;
+    }
+
+    template <typename T>
+    T *get_pointer_from_offset(size_t offset) const {
+        assert(offset < size());
+
+        for (auto &c : chunks) {
+            if (offset < c.count) {
+                return (T *)(c.data + offset);
+            }
+            offset -= c.count;
+        }
+
+        assert(false);
+        return nullptr;
     }
 };
 
