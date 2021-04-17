@@ -19,12 +19,13 @@ set (IR_SRCS
     src/x64.cpp
     src/linker_object.cpp
     src/print_ir.cpp
+    src/opt.cpp
 )
 
 
 add_library(lib_objects OBJECT ${IR_SRCS})
 add_library(irpgt STATIC ${IR_SRCS})
-set_target_properties(irpgt PROPERTIES PUBLIC_HEADER "src/ir.h;src/linker_object.h;src/general.h")
+set_target_properties(irpgt PROPERTIES PUBLIC_HEADER "src/ir.h;src/linker_object.h;src/general.h;src/opt.h")
 install(TARGETS irpgt EXPORT irpgtConfig
         LIBRARY DESTINATION lib
         PUBLIC_HEADER DESTINATION include/irpgt
