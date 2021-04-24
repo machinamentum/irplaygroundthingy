@@ -645,6 +645,8 @@ Instruction_Load *make_load(IR_Context *context, Value *pointer_value) {
     load->pointer_value = pointer_value;
     load->value_type    = pointer_value->value_type->as<Pointer_Type>()->pointer_to;
 
+    assert(load->value_type->type != Type::VOID);
+
     pointer_value->uses++;
     return load;
 }
@@ -652,6 +654,8 @@ Instruction_Load *make_load(IR_Context *context, Value *pointer_value) {
 inline
 Instruction_Store *make_store(IR_Context *context, Value *source_value, Value *store_target) {
     assert(store_target->value_type->type == Type::POINTER);
+
+    assert(source_value->value_type->type != Type::VOID);
 
     Instruction_Store *store = context->new_node<Instruction_Store>();
     store->source_value = source_value;

@@ -1095,10 +1095,11 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
             bool has_internal_definition = function_target->blocks.size() != 0;
 
             if (object->use_absolute_addressing) {
-                maybe_spill_register(emitter, &emitter->register_usage[RCX]);
+                const u8 INDIRECT_CALL_REG = R11;
+                maybe_spill_register(emitter, &emitter->register_usage[INDIRECT_CALL_REG]);
 
                 // @Cutnpaste move_imm64_to_reg64
-                move_imm64_to_reg64(&emitter->function_buffer, 0, RCX);
+                move_imm64_to_reg64(&emitter->function_buffer, 0, INDIRECT_CALL_REG);
 
                 if (has_internal_definition) {
                     emitter->absolute_call_fixup_targets.emplace_back(emitter->function_buffer.size() - 8, function_target);
@@ -1114,8 +1115,11 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
                     code_section->relocations.push_back(reloc);
                 }
 
+                if (BIT3(INDIRECT_CALL_REG))
+                    emitter->function_buffer.append_byte(REX(1, 0, 0, BIT3(INDIRECT_CALL_REG)));
+
                 emitter->function_buffer.append_byte(0xFF); // callq reg
-                emitter->function_buffer.append_byte(ModRM(0b11, 2, RCX));
+                emitter->function_buffer.append_byte(ModRM(0b11, 2, LOW3(INDIRECT_CALL_REG)));
             } else {
                 emitter->function_buffer.append_byte(0xE8); // callq rip-relative
                 // emitter->function_buffer.append_byte(ModRM(0b00, 0b000, 0b101));
@@ -1339,6 +1343,12 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
     emitter->register_usage.push_back(make_reg(RDI));
     emitter->register_usage.push_back(make_reg(R8));
     emitter->register_usage.push_back(make_reg(R9));
+    emitter->register_usage.push_back(make_reg(R10));
+    emitter->register_usage.push_back(make_reg(R11));
+    emitter->register_usage.push_back(make_reg(R12));
+    emitter->register_usage.push_back(make_reg(R13));
+    emitter->register_usage.push_back(make_reg(R14));
+    emitter->register_usage.push_back(make_reg(R15));
 
     for (u8 i = 0; i <= XMM15; ++i) {
         emitter->xmm_usage.push_back(make_reg(i));
