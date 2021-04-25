@@ -40,8 +40,6 @@ struct X64_Emitter
     // we should put these in Target or something...
     Array<u8>       parameter_registers;
 
-
-    Array<s32 *>    stack_size_fixups;
     s32 stack_size = 0;
     s32 largest_call_stack_adjustment = 0;
 

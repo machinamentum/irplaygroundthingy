@@ -58,6 +58,7 @@ struct Address_Info {
     u8 scale       = 1;    // must be 1, 2, 4, or 8
 };
 
+static
 Address_Info addr_register_disp(u8 machine_reg, s32 disp = 0) {
     Address_Info info;
     info.machine_reg = machine_reg;
@@ -90,6 +91,7 @@ u8 get_exponent(u8 i) {
     return shift;
 }
 
+static
 void _single_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 reg, u32 size) {
     if (size == 2) dataptr->append_byte(0x66);
     dataptr->append_byte(REX((size == 8) ? 1 : 0, 0, 0, BIT3(reg)));
@@ -97,10 +99,12 @@ void _single_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, u8 re
     dataptr->append_byte(opcode + LOW3(reg));
 }
 
+static
 bool is_RSP_thru_RDI(u8 reg) {
     return reg >= RSP && reg <= RDI;
 }
 
+static
 s32 *_two_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, bool is_direct_register_use, u8 operand1, Address_Info operand2, u32 size, bool _0F_op = false) {
     u8 mod = MOD_INDIRECT_32BIT_DISP;
     if       (is_direct_register_use) mod = MOD_DIRECT;
@@ -166,6 +170,7 @@ s32 *_two_register_operand_instruction(Data_Buffer *dataptr, u8 opcode, bool is_
     return nullptr;
 }
 
+static
 void _move_bidrectional(Data_Buffer *dataptr, u8 value_reg, Address_Info info, u32 size, bool to_memory) {
     u8 op = (size == 1) ? 0x88 : 0x89;
     if (!to_memory) op += 0x02;
@@ -173,6 +178,7 @@ void _move_bidrectional(Data_Buffer *dataptr, u8 value_reg, Address_Info info, u
     _two_register_operand_instruction(dataptr, op, false, value_reg, info, size);
 }
 
+static
 s32 *_move_float_bidirectional(Data_Buffer *dataptr, u8 value_reg, Address_Info info, u32 size, bool to_memory) {
     assert(size == 4 || size == 8);
 
@@ -184,14 +190,17 @@ s32 *_move_float_bidirectional(Data_Buffer *dataptr, u8 value_reg, Address_Info 
     return _two_register_operand_instruction(dataptr, op, false, value_reg, info, size, true);
 }
 
+static
 void move_xmm_to_memory(Data_Buffer *dataptr, u8 src, Address_Info info, u32 size) {
     _move_float_bidirectional(dataptr, src, info, size, true);
 }
 
+static
 s32 *move_memory_to_xmm(Data_Buffer *dataptr, u8 dst, Address_Info info, u32 size) {
     return _move_float_bidirectional(dataptr, dst, info, size, false);
 }
 
+static
 void move_xmm_to_xmm(Data_Buffer *dataptr, u8 src, u8 dst) {
     u32 size = 8;
     u8 op = 0x10;
@@ -201,8 +210,7 @@ void move_xmm_to_xmm(Data_Buffer *dataptr, u8 src, u8 dst) {
     _two_register_operand_instruction(dataptr, op, true, dst, addr_register_disp(src), size, true);
 }
 
-//66 REX.W 0F 6E /r MOVQ xmm, r/m64
-
+static
 void movq_xmm_to_reg(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     assert(size == 4 || size == 8);
 
@@ -213,6 +221,7 @@ void movq_xmm_to_reg(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     _two_register_operand_instruction(dataptr, 0x7E, true, src, addr_register_disp(dst), size, true);
 }
 
+static
 void movq_reg_to_xmm(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     assert(size == 4 || size == 8);
 
@@ -223,14 +232,17 @@ void movq_reg_to_xmm(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     _two_register_operand_instruction(dataptr, 0x6E, true, src, addr_register_disp(dst), size, true);
 }
 
+static
 void move_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst) {
     _two_register_operand_instruction(dataptr, 0x8B, true, dst, addr_register_disp(src), 8);
 }
 
+static
 void move_reg_to_memory(Data_Buffer *dataptr, u8 src, Address_Info info, u32 size) {
     _move_bidrectional(dataptr, src, info, size, true);
 }
 
+static
 void move_memory_to_reg(Data_Buffer *dataptr, u8 dst, Address_Info info, u32 size) {
     _move_bidrectional(dataptr, dst, info, size, false);
 }
@@ -238,6 +250,7 @@ void move_memory_to_reg(Data_Buffer *dataptr, u8 dst, Address_Info info, u32 siz
 // RCX = count
 // RDI = dst
 // RSI = src
+static
 void rep_move_string(Data_Buffer *dataptr, u32 size) {
     if (size == 2) dataptr->append_byte(0x66);
 
@@ -248,6 +261,7 @@ void rep_move_string(Data_Buffer *dataptr, u32 size) {
     dataptr->append_byte(op);
 }
 
+static
 u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 value, u8 reg, u32 size = 8) {
     u8 op = (size == 1) ? 0xB0 : 0xB8;
 
@@ -263,6 +277,7 @@ u64 *move_imm64_to_reg64(Data_Buffer *dataptr, u64 value, u8 reg, u32 size = 8) 
     return (u64 *)operand;
 }
 
+static
 void move_imm32_sext_to_memory(Data_Buffer *dataptr, s32 value, Address_Info info, u32 size) {
     //FIXME the name of this function is misleading because only the size = 8 variant does sign extension
     // We can also save a byte if size = 4 I think, since we don't need to REX prefix unless we need BIT3(reg) registers
@@ -277,6 +292,7 @@ void move_imm32_sext_to_memory(Data_Buffer *dataptr, s32 value, Address_Info inf
     if (size == 4 || size == 8) *(s32 *)operand = value;
 }
 
+static
 void move_memory_to_reg_zero_ext(Data_Buffer *dataptr, u8 value_reg, Address_Info info, u32 size) {
     if (size <= 2) {
         u8 op = (size == 1) ? 0xB6 : 0xB7;
@@ -288,6 +304,7 @@ void move_memory_to_reg_zero_ext(Data_Buffer *dataptr, u8 value_reg, Address_Inf
     }
 }
 
+static
 void move_reg_to_reg_zero_ext(Data_Buffer *dataptr, u8 src, u8 dst, u32 srcsize, u32 dstsize) {
     assert(srcsize <= 2);
     assert(dstsize >= 2);
@@ -298,6 +315,7 @@ void move_reg_to_reg_zero_ext(Data_Buffer *dataptr, u8 src, u8 dst, u32 srcsize,
     _two_register_operand_instruction(dataptr, op, true, dst, addr_register_disp(src), dstsize, true);
 }
 
+static
 void move_imm_to_reg(Data_Buffer *dataptr, u64 value, u8 reg) {
     if (false && fits_into<u8>(value)) { // This doesn't actually save us any more instruction bytes over the u32 variant, and actually introduces more bytes
         move_imm64_to_reg64(dataptr, value, reg, 1);
@@ -311,9 +329,11 @@ void move_imm_to_reg(Data_Buffer *dataptr, u64 value, u8 reg) {
         move_imm64_to_reg64(dataptr, value, reg, 8);
 }
 
+static
 void xor_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size);
 // same as move_imm64_to_reg64, but we are allowed to clear the register using xor if 0 or try to stuff the value
 // into as small a register as possible then zext if needed
+static
 void move_imm_to_reg_or_clear(Data_Buffer *dataptr, u64 value, u8 reg) {
     if (value)
         move_imm_to_reg(dataptr, value, reg);
@@ -323,14 +343,17 @@ void move_imm_to_reg_or_clear(Data_Buffer *dataptr, u64 value, u8 reg) {
 
 
 // Need to allocate 4 bytes of space after this call
+static
 s32 *lea_rip_relative_into_reg64(Data_Buffer *dataptr, u8 reg) {
     return _two_register_operand_instruction(dataptr, 0x8D, false, reg, addr_register_disp(RBP), 8);
 }
 
+static
 void lea_into_reg64(Data_Buffer *dataptr, u8 dst, Address_Info source) {
     _two_register_operand_instruction(dataptr, 0x8D, false, dst, source, 8);
 }
 
+static
 void _push_pop_impl(Data_Buffer *dataptr, u8 opcode, u8 reg, u8 size) {
     if (size == REG_WIDTH && BIT3(reg) == 0) // optimal path, one instruction push/pop
         dataptr->append_byte(opcode + LOW3(reg));
@@ -338,14 +361,17 @@ void _push_pop_impl(Data_Buffer *dataptr, u8 opcode, u8 reg, u8 size) {
         _single_register_operand_instruction(dataptr, 0x58, reg, size);
 }
 
+static
 void pop(Data_Buffer *dataptr, u8 reg, u8 size = 8) {
     _push_pop_impl(dataptr, 0x58, reg, size);
 }
 
+static
 void push(Data_Buffer *dataptr, u8 reg, u8 size = 8) {
     _push_pop_impl(dataptr, 0x50, reg, size);
 }
 
+static
 s32 *_mathop_imm32_reg64(Data_Buffer *dataptr, u8 reg, s32 value, u32 size, u8 op_select) {
     u8 op = (size == 1) ? 0x80 : 0x81;
     _two_register_operand_instruction(dataptr, op, true, op_select, addr_register_disp(reg), size);
@@ -363,14 +389,17 @@ s32 *_mathop_imm32_reg64(Data_Buffer *dataptr, u8 reg, s32 value, u32 size, u8 o
 const u8 MATH_OP_SELECT_SUB = 5;
 const u8 MATH_OP_SELECT_ADD = 0;
 
+static
 s32 *sub_imm32_from_reg64(Data_Buffer *dataptr, u8 reg, s32 value, u32 size) {
     return _mathop_imm32_reg64(dataptr, reg, value, size, MATH_OP_SELECT_SUB);
 }
 
+static
 s32 *add_imm32_to_reg64(Data_Buffer *dataptr, u8 reg, s32 value, u32 size) {
     return _mathop_imm32_reg64(dataptr, reg, value, size, MATH_OP_SELECT_ADD);
 }
 
+static
 void imul_reg64_with_imm32(Data_Buffer *dataptr, u8 reg, s32 value, u32 size) {
     if (size < 2) size = 2; // @FixMe maybe, imul in this form does not support 1-byte multiplication
 
@@ -384,6 +413,7 @@ void imul_reg64_with_imm32(Data_Buffer *dataptr, u8 reg, s32 value, u32 size) {
     if (size == 4 || size == 8) *(s32 *)operand = value;
 }
 
+static
 void imul_reg64_with_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     if (size < 2) size = 2; // @FixMe maybe, imul in this form does not support 1-byte multiplication
 
@@ -391,16 +421,19 @@ void imul_reg64_with_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     _two_register_operand_instruction(dataptr, op, true, dst, addr_register_disp(src), size, true);
 }
 
+static
 void add_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     u8 op = (size == 1) ? 0x00 : 0x01;
     _two_register_operand_instruction(dataptr, op, true, src, addr_register_disp(dst), size);
 }
 
+static
 void xor_reg64_to_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     u8 op = (size == 1) ? 0x32 : 0x33;
     _two_register_operand_instruction(dataptr, op, true, src, addr_register_disp(dst), size);
 }
 
+static
 void div_reg64_with_rax(Data_Buffer *dataptr, u8 src, u32 size, bool signed_division) {
     u8 op = (size == 1) ? 0xF6 : 0xF7;
     u8 version = 6; // unsigned
@@ -408,15 +441,18 @@ void div_reg64_with_rax(Data_Buffer *dataptr, u8 src, u32 size, bool signed_divi
     _two_register_operand_instruction(dataptr, op, true, version, addr_register_disp(src), size);
 }
 
+static
 void sub_reg64_from_reg64(Data_Buffer *dataptr, u8 src, u8 dst, u32 size) {
     u8 op = (size == 1) ? 0x28 : 0x29;
     _two_register_operand_instruction(dataptr, op, true, src, addr_register_disp(dst), size);
 }
 
+static
 void debugbreak(Data_Buffer *dataptr) {
     dataptr->append_byte(0xCC);
 }
 
+static
 void cwd_cdq(Data_Buffer *dataptr, u32 size) {
     // 1 byte sign extension not supported, it seems this is because 1-byte
     // division uses the entire 16-bit AX register instead of using DL:AL together
@@ -424,6 +460,7 @@ void cwd_cdq(Data_Buffer *dataptr, u32 size) {
     _single_register_operand_instruction(dataptr, 0x99, RAX, size);
 }
 
+static
 void move_memory_value_to_register(Data_Buffer *dataptr, u8 value_reg, Address_Info info, Type *type) {
     if (type->type == Type::FLOAT)
         move_memory_to_xmm(dataptr, value_reg, info, type->size);
@@ -433,6 +470,7 @@ void move_memory_value_to_register(Data_Buffer *dataptr, u8 value_reg, Address_I
         move_memory_to_reg_zero_ext(dataptr, value_reg, info, type->size);
 }
 
+static
 void move_register_value_to_memory(Data_Buffer *dataptr, u8 value_reg, Address_Info info, Type *type) {
     if (type->type == Type::FLOAT)
         move_xmm_to_memory(dataptr, value_reg, info, type->size);
@@ -442,6 +480,7 @@ void move_register_value_to_memory(Data_Buffer *dataptr, u8 value_reg, Address_I
         move_reg_to_memory(dataptr, value_reg, info, type->size);
 }
 
+static
 Register *get_free_register(X64_Emitter *emitter) {
     for (auto &reg : emitter->register_usage) {
         if (reg.is_free) {
@@ -453,6 +492,7 @@ Register *get_free_register(X64_Emitter *emitter) {
     return nullptr;
 }
 
+static
 Register *get_free_xmm_register(X64_Emitter *emitter) {
     for (auto &reg : emitter->xmm_usage) {
         if (reg.is_free) {
@@ -464,6 +504,7 @@ Register *get_free_xmm_register(X64_Emitter *emitter) {
     return nullptr;
 }
 
+static
 void maybe_spill_register(X64_Emitter *emitter, Register *reg) {
     if (reg->currently_holding_result_of_instruction) {
         auto inst = reg->currently_holding_result_of_instruction;
@@ -1263,6 +1304,7 @@ u8 emit_instruction(X64_Emitter *emitter, Linker_Object *object, Function *funct
     return 0;
 }
 
+static
 Register make_reg(u8 machine_reg, bool is_free = true) {
     Register reg = {};
     reg.machine_reg = machine_reg;
@@ -1270,6 +1312,7 @@ Register make_reg(u8 machine_reg, bool is_free = true) {
     return reg;
 }
 
+static
 bool is_callee_saved(const Target &target, u8 reg) {
     if (target.is_win32())
         return (reg >= RBX && reg <= RDI) || (reg >= R12 && reg <= R15);
@@ -1293,7 +1336,6 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
     emitter->register_usage.clear();
     emitter->xmm_usage.clear();
     emitter->parameter_registers.clear();
-    emitter->stack_size_fixups.clear();
     emitter->stack_size = 0;
     emitter->largest_call_stack_adjustment = 0;
     emitter->emitting_last_block = false;
@@ -1447,8 +1489,7 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
 
     if (emitter->stack_size != 0) {
         move_reg64_to_reg64(&emitter->code_section->data, RSP, RBP);
-        s32 *stack_size_target = sub_imm32_from_reg64(&emitter->code_section->data, RSP, 0, 8);
-        emitter->stack_size_fixups.push_back(stack_size_target);
+        sub_imm32_from_reg64(&emitter->code_section->data, RSP, emitter->stack_size, 8);
     }
 
     // Touch stack pages from top to bottom
@@ -1457,8 +1498,7 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
     // and emitting one mov instruction per stack page now that
     // we know the stack size post-function-body-generation
     if (object->target.is_win32()) {
-        s32 *move_stack_size_to_rax = (s32 *)move_imm64_to_reg64(&emitter->code_section->data, 0, RAX, 4); // 4-byte immediate
-        emitter->stack_size_fixups.push_back(move_stack_size_to_rax);
+        move_imm64_to_reg64(&emitter->code_section->data, emitter->stack_size, RAX, 4); // 4-byte immediate
 
         auto loop_start = emitter->code_section->data.size();
         sub_imm32_from_reg64(&emitter->code_section->data, RAX, 4096, 8);
@@ -1495,15 +1535,8 @@ void x64_emit_function(X64_Emitter *emitter, Linker_Object *object, Function *fu
 
     emitter->code_section->data.append(&emitter->function_buffer);
 
-    if (emitter->stack_size != 0) {
-        s32 *stack_size_target = add_imm32_to_reg64(&emitter->code_section->data, RSP, 0, 8);
-        emitter->stack_size_fixups.push_back(stack_size_target);
-    }
-
-    assert(emitter->stack_size >= 0);
-    for (auto fixup : emitter->stack_size_fixups) {
-        *fixup = emitter->stack_size;
-    }
+    if (emitter->stack_size != 0)
+        add_imm32_to_reg64(&emitter->code_section->data, RSP, emitter->stack_size, 8);
 
     size_t epilogue_start_offset = emitter->code_section->data.size();
 

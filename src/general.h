@@ -211,6 +211,12 @@ struct Bump_Allocator {
         return new (result) T();
     }
 
+    template<typename T>
+    void append(T v) {
+        T *ptr = allocate<T>();
+        *ptr = v;
+    }
+
     void append(Bump_Allocator<DEFAULT_CHUNK_SIZE> *other) {
         for (auto &c : other->chunks) {
             append(c.data, c.count);
