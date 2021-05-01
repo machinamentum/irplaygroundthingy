@@ -535,6 +535,7 @@ Register *claim_register(X64_Emitter *emitter, Register *reg, Value *claimer) {
     return reg;
 }
 
+static
 void free_register(Register *reg) {
     reg->currently_holding_result_of_instruction = nullptr;
     reg->is_free = true;
@@ -622,7 +623,7 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
             }
 
             if (object->use_absolute_addressing) {
-                move_imm64_to_reg64(&emitter->function_buffer, data_sec_offset, reg->machine_reg, 8);
+                move_imm64_to_reg64(&emitter->function_buffer, 0, reg->machine_reg, 8);
     
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
@@ -635,7 +636,7 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
             } else {
                 // lea data-section-location(%rip), %reg
                 s32 *value = lea_rip_relative_into_reg64(&emitter->function_buffer, reg->machine_reg);
-                *value = static_cast<s32>(data_sec_offset);
+                *value = 0;
 
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
@@ -643,6 +644,7 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
                 reloc.offset = emitter->function_buffer.size() - 4;
                 reloc.symbol_index = data_section->symbol_index;
                 reloc.size = 4;
+                reloc.addend = static_cast<u64>(data_sec_offset);
 
                 code_section->relocations.push_back(reloc);
             }
@@ -673,7 +675,7 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
             assert(data_sec_offset >= 0);
 
             if (object->use_absolute_addressing) {
-                move_imm64_to_reg64(&emitter->function_buffer, data_sec_offset, reg->machine_reg, 8);
+                move_imm64_to_reg64(&emitter->function_buffer, 0, reg->machine_reg, 8);
     
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
@@ -687,7 +689,7 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
                 move_memory_to_xmm(&emitter->function_buffer, xmm->machine_reg, addr_register_disp(reg->machine_reg), constant->value_type->size);
             } else {
                 s32 *value = move_memory_to_xmm(&emitter->function_buffer, xmm->machine_reg, addr_register_disp(RBP), constant->value_type->size);
-                *value = static_cast<s32>(data_sec_offset);
+                *value =0;
 
                 Relocation reloc;
                 reloc.is_for_rip_call = false;
@@ -695,6 +697,7 @@ u8 emit_load_of_value(X64_Emitter *emitter, Linker_Object *object, Section *code
                 reloc.offset = emitter->function_buffer.size() - 4;
                 reloc.symbol_index = data_section->symbol_index;
                 reloc.size = 4;
+                reloc.addend = static_cast<u64>(data_sec_offset);
 
                 code_section->relocations.push_back(reloc);
             }

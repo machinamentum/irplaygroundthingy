@@ -43,6 +43,20 @@ const u8  U8_MAX  = 0xFF;
 const u16 U16_MAX = 0xFFFF;
 const u32 U32_MAX = 0xFFFFFFFF;
 
+inline
+bool fits_into_bits(s64 v, u8 bits) {
+    u8 bits_to_clear = (sizeof(v) * 8) - bits;
+    s64 b = (v << bits_to_clear) >> bits_to_clear;
+    return b == v;
+}
+
+inline
+bool fits_into_bits_unsigned(u64 v, u8 bits) {
+    u8 bits_to_clear = (sizeof(v) * 8) - bits;
+    u64 b = (v << bits_to_clear) >> bits_to_clear;
+    return b == v;
+}
+
 template <typename T, typename B>
 bool fits_into(B b) {
     T a = (T)b;

@@ -81,7 +81,7 @@ const u32 MH_MAGIC_64 = 0xFEEDFACF;
 const u32 MH_CIGAM_64 = 0xCFFAEDFE;
 
 const u32 CPU_TYPE_x86_64  = 0x1000007;
-const u32 CPU_TYPE_AArch64 = 0x100000B;
+const u32 CPU_TYPE_AArch64 = 0x100000C;
 
 const u32 MH_OBJECT   = 1;
 const u32 MH_EXECUTE  = 2;
@@ -116,6 +116,13 @@ const u32 X86_64_RELOC_BRANCH     = 2;
 const u32 X86_64_RELOC_GOT_LOAD   = 3;
 const u32 X86_64_RELOC_GOT        = 4;
 const u32 X86_64_RELOC_SUBTRACTOR = 5;
+
+const u32 ARM64_RELOC_UNSIGNED    = 0;
+const u32 ARM64_RELOC_SUBTRACTOR  = 1;
+const u32 ARM64_RELOC_BRANCH26    = 2;
+const u32 ARM64_RELOC_PAGE21      = 3;
+const u32 ARM64_RELOC_PAGEOFF12   = 4;
+const u32 ARM64_RELOC_ADDEND      = 10;
 
 const u8 N_EXT  = 0x01;
 const u8 N_SECT = 0x0E;
@@ -177,8 +184,8 @@ void emit_macho_file(IR_Context *context, Linker_Object *object) {
         memcpy(section->sectname, sect.name.data(), sect.name.length());
         memcpy(section->segname,  sect.segment.data(), sect.segment.length());
         section->size = sect.data.size();
-        section->align = 0; // @TOOD
-        section->nreloc = trunc<u32>(sect.relocations.size());
+        section->align = 2; // alignment = 2^align // @TODO
+        section->nreloc = 0;
         section->flags = 0;
 
         if (sect.is_pure_instructions) section->flags |= S_ATTR_PURE_INSTRUCTIONS | 0x400;
@@ -197,20 +204,26 @@ void emit_macho_file(IR_Context *context, Linker_Object *object) {
     for (auto &sect : object->sections) {
         section_64 *section = (section_64 *)sect.mach_section;
 
+        u64 alignment_bytes = ensure_aligned(addr, u64(2 << section->align)) - addr;
+        for (u64 i = 0; i < alignment_bytes; ++i)
+            buffer.append_byte(0xFF);
+
+        addr += alignment_bytes;
+
         section->addr = addr;
         section->offset = buffer.size();
+
 
         buffer.append(&sect.data);
 
         addr += section->size;
+        addr = ensure_aligned(addr, u64(4));
 
         section->reloff = buffer.size();
-        section->nreloc = trunc<u32>(sect.relocations.size());
+
+        size_t relocations_size = sect.relocations.size();
 
         for (auto &reloc : sect.relocations) {
-            relocation_info *info = buffer.allocate_unaligned<relocation_info>();
-            info->r_address = reloc.offset;
-
             u32 size = 0;
             if      (reloc.size == 1) size = RELOC_LEN1;
             else if (reloc.size == 2) size = RELOC_LEN2;
@@ -221,12 +234,38 @@ void emit_macho_file(IR_Context *context, Linker_Object *object) {
             u32 pcrel = 0;
             if (reloc.is_for_rip_call || reloc.is_rip_relative) pcrel = 1;
 
-            u32 type = X86_64_RELOC_UNSIGNED;
-            if      (reloc.is_for_rip_call) type = X86_64_RELOC_BRANCH;
-            else if (reloc.is_rip_relative) type = X86_64_RELOC_SIGNED;
+            if (object->target.is_aarch64() && reloc.is_for_page_offset) {
+                if (reloc.addend) {
+                    relocation_info *info = buffer.allocate_unaligned<relocation_info>();
+                    info->r_address = reloc.offset;
+                    info->r_info = R_INFO(u32(reloc.addend), 0, size, 0, ARM64_RELOC_ADDEND);
+                    relocations_size += 1;
+                }
+            }
 
+            relocation_info *info = buffer.allocate_unaligned<relocation_info>();
+            info->r_address = reloc.offset;
+
+            u32 type = 0;
+
+            if (object->target.is_x64()) {
+                type = X86_64_RELOC_UNSIGNED;
+                if      (reloc.is_for_rip_call) type = X86_64_RELOC_BRANCH;
+                else if (reloc.is_rip_relative) type = X86_64_RELOC_SIGNED;
+            } else if (object->target.is_aarch64()) {
+                type = ARM64_RELOC_UNSIGNED;
+                if      (reloc.is_for_rip_call) type = ARM64_RELOC_BRANCH26;
+                else if (reloc.is_rip_relative)
+                    type = ARM64_RELOC_PAGE21;
+                else if (reloc.is_for_page_offset)
+                    type = ARM64_RELOC_PAGEOFF12;
+            }
+
+            // TODO when RELOC_ADDEND check that symbol_index/addend fits into 24 bit symbol index field
             info->r_info = R_INFO(reloc.symbol_index, pcrel, size, 1, type);
         }
+
+        section->nreloc = trunc<u32>(relocations_size);
     }
 
     segment_cmd->filesize =  buffer.size() - segment_cmd->fileoff;
