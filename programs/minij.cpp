@@ -1055,14 +1055,13 @@ int main(int argc, char **argv) {
 
     IR_Context context;
     IR_Man *irm = new IR_Man(&context);
-    Function *debugbreak = new Function();
-    debugbreak->intrinsic_id = Function::DEBUG_BREAK;
-    debugbreak->value_type = make_func_type(make_void_type());
-
+    Function *debugbreak = irm->make_intrinsic(Function::DEBUG_BREAK);
     irm->debugbreak = debugbreak;
 
+    unit.functions.push_back(debugbreak);
+
     for (auto function : functions) {
-        // if (strcmp(function->name, "__debugbreak") == 0) continue;
+        if (strcmp(function->name, "__debugbreak") == 0) continue;
 
         std::vector<Type *> arg_types;
         for (auto var : function->arguments) {

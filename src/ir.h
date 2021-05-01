@@ -744,6 +744,21 @@ struct IR_Manager {
         return func;
     }
 
+    Function *make_intrinsic(Function::Intrinsics id) {
+        assert(id != Function::NOT_INTRINSIC);
+        Function *func = context->node_storage.allocate<Function>();
+        func->intrinsic_id = id;
+
+        switch (id) {
+            case Function::NOT_INTRINSIC:
+            case Function::DEBUG_BREAK:
+                func->name = context->intern("__debugbreak");
+                func->value_type = make_func_type(make_void_type());
+        }
+
+        return func;
+    }
+
     Instruction_Alloca *insert_alloca(Type *alloca_type, u32 array_size = 1) {
         auto _alloca = make_alloca(context, alloca_type, array_size);
         block->insert(_alloca);
