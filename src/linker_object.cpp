@@ -268,20 +268,22 @@ void jit_generate_code(IR_Context *context, Compilation_Unit *unit, JIT_Lookup_S
 
     const auto fixup_address = [&object](void *target, void *symbol_target, const Relocation &reloc) {
         bool rip = reloc.is_for_rip_call || reloc.is_rip_relative;
-        intptr_t rip_value = (intptr_t)((intptr_t)symbol_target - (intptr_t)target);
 
         if (object.target.is_x64()) {
+            intptr_t rip_value = (intptr_t)((intptr_t)symbol_target - (intptr_t)target);
             assert(!rip);
             if (rip) *(s32 *) target = rip_value + reloc.addend;
             else     *(u64 *) target = ((u64)symbol_target) + reloc.addend;
         } else if (object.target.is_aarch64()) {
             if      (reloc.is_for_rip_call) {
+                intptr_t rip_value = (intptr_t)((intptr_t)symbol_target - (intptr_t)target);
                 assert(fits_into_bits((rip_value / 4), 26));
                 *(u32 *) target = (*(u32 *)target) | ((rip_value / 4) & 0x3FFFFFF); // assume writing into bl imm26 field
             }
             else if (reloc.is_rip_relative) {
-                assert(fits_into_bits((rip_value / 4096), 21));
-                *(u32 *) target = (*(u32 *)target) | DATA_IMM_ADR_IMMHI(rip_value / 4096) | DATA_IMM_ADR_IMMLO(rip_value / 4096); // assume writing into adrp
+                intptr_t rip_value = (intptr_t(symbol_target) / 4096) - (intptr_t(target) / 4096);
+                assert(fits_into_bits(rip_value, 21));
+                *(u32 *) target = (*(u32 *)target) | DATA_IMM_ADR_IMMHI(rip_value) | DATA_IMM_ADR_IMMLO(rip_value); // assume writing into adrp
             }
             else if (reloc.is_for_page_offset) {
                 u32 value = intptr_t(symbol_target) % 4096;

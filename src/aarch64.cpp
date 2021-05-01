@@ -311,6 +311,8 @@ void load_symbol_address(AArch64_Emitter *emitter, Section *code_section, u32 sy
     // add with the shift bit set, which shifts up the imm12 by 12 bits, allowing
     // us to address offets up to 0x1000000 (16MB). The long term solution is likely
     // to create temporary symbols for most items in the data section :/
+    // ... or maybe we can add an addend to the adrp relocation ? which would
+    // give us +- 4GB
     add_imm12_to_reg64(&emitter->function_buffer, machine_reg, machine_reg, 0);
     {
         Relocation reloc;
