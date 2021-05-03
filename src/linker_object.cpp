@@ -136,7 +136,7 @@ void generate_linker_object(IR_Context *context, Compilation_Unit *unit, Linker_
 
             // Absolute address use still needs to use a relocation because the .text may be moved to anywhere
             Relocation reloc;
-            reloc.is_for_rip_call = false;
+            reloc.type = Relocation::ABSOLUTE;
             reloc.offset = trunc<u32>(target);
             reloc.symbol_index = text_symbol_index;
             reloc.size = 8;
@@ -166,7 +166,7 @@ void generate_linker_object(IR_Context *context, Compilation_Unit *unit, Linker_
 
             // Absolute address use still needs to use a relocation because the .text may be moved to anywhere
             Relocation reloc;
-            reloc.is_for_rip_call = false;
+            reloc.type = Relocation::ABSOLUTE;
             reloc.offset = trunc<u32>(target);
             reloc.symbol_index = text_symbol_index;
             reloc.size = 8;
@@ -267,7 +267,18 @@ void jit_generate_code(IR_Context *context, Compilation_Unit *unit, JIT_Lookup_S
 #define DATA_IMM_ADR_IMMLO(imm) (((imm) & 0b11) << 29)
 
     const auto fixup_address = [&object](void *target, void *symbol_target, const Relocation &reloc) {
-        bool rip = reloc.is_for_rip_call || reloc.is_rip_relative;
+        bool rip = reloc.type == Relocation::RIP_CALL || reloc.type == Relocation::RIP_DATA;
+
+        if (object.target.is_x64()) {
+            if (rip) assert(reloc.size == 4);
+            else     assert(reloc.size == 8);
+        }
+
+        // RIP addressing doesnt work here because we cannot gaurantee that data symbols are
+        // within 2gbs of the target, or within 128MB on ARM. @FixMe we could gaurantee this for RIP-relative calls
+        // into code within the same .text section.
+        if (object.target.is_x64())
+            assert(!rip);
 
         if (object.target.is_x64()) {
             intptr_t rip_value = (intptr_t)((intptr_t)symbol_target - (intptr_t)target);
@@ -275,17 +286,17 @@ void jit_generate_code(IR_Context *context, Compilation_Unit *unit, JIT_Lookup_S
             if (rip) *(s32 *) target = rip_value + reloc.addend;
             else     *(u64 *) target = ((u64)symbol_target) + reloc.addend;
         } else if (object.target.is_aarch64()) {
-            if      (reloc.is_for_rip_call) {
+            if      (reloc.type == Relocation::RIP_CALL) {
                 intptr_t rip_value = (intptr_t)((intptr_t)symbol_target - (intptr_t)target);
                 assert(fits_into_bits((rip_value / 4), 26));
                 *(u32 *) target = (*(u32 *)target) | ((rip_value / 4) & 0x3FFFFFF); // assume writing into bl imm26 field
             }
-            else if (reloc.is_rip_relative) {
+            else if (reloc.type == Relocation::RIP_DATA) {
                 intptr_t rip_value = (intptr_t(symbol_target) / 4096) - (intptr_t(target) / 4096);
                 assert(fits_into_bits(rip_value, 21));
                 *(u32 *) target = (*(u32 *)target) | DATA_IMM_ADR_IMMHI(rip_value) | DATA_IMM_ADR_IMMLO(rip_value); // assume writing into adrp
             }
-            else if (reloc.is_for_page_offset) {
+            else if (reloc.type == Relocation::PAGEOFFSET) {
                 u32 value = intptr_t(symbol_target) % 4096;
 
                 u32 v = ((*(u32 *)target) >> 10) & 0x0FFF;
@@ -301,20 +312,6 @@ void jit_generate_code(IR_Context *context, Compilation_Unit *unit, JIT_Lookup_S
 
     for (size_t i = 0; i < code_section->relocations.size(); ++i) {
         const Relocation &reloc = code_section->relocations[i];
-
-        bool rip = reloc.is_for_rip_call || reloc.is_rip_relative;
-        bool is_page_offset = reloc.is_for_page_offset;
-
-        if (object.target.is_x64()) {
-            if (rip) assert(reloc.size == 4);
-            else     assert(reloc.size == 8);
-        }
-
-        // RIP addressing doesnt work here because we cannot gaurantee that data symbols are
-        // within 2gbs of the target, or within 128MB on ARM. @FixMe we could gaurantee this for RIP-relative calls
-        // into code within the same .text section.
-        if (object.target.is_x64())
-            assert(!rip);
 
         auto target = text_memory + reloc.offset;
         auto symbol = &object.symbol_table[reloc.symbol_index];

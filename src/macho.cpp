@@ -223,7 +223,9 @@ void emit_macho_file(IR_Context *context, Linker_Object *object) {
 
         size_t relocations_size = sect.relocations.size();
 
-        for (auto &reloc : sect.relocations) {
+        for (size_t i = 0; i < sect.relocations.size(); ++i) {
+            auto &reloc = sect.relocations[i];
+
             u32 size = 0;
             if      (reloc.size == 1) size = RELOC_LEN1;
             else if (reloc.size == 2) size = RELOC_LEN2;
@@ -232,9 +234,9 @@ void emit_macho_file(IR_Context *context, Linker_Object *object) {
             else assert(false);
 
             u32 pcrel = 0;
-            if (reloc.is_for_rip_call || reloc.is_rip_relative) pcrel = 1;
+            if (reloc.type == Relocation::RIP_CALL || reloc.type == Relocation::RIP_DATA) pcrel = 1;
 
-            if (object->target.is_aarch64() && reloc.is_for_page_offset) {
+            if (object->target.is_aarch64() && reloc.type == Relocation::PAGEOFFSET) {
                 if (reloc.addend) {
                     relocation_info *info = buffer.allocate_unaligned<relocation_info>();
                     info->r_address = reloc.offset;
@@ -250,14 +252,14 @@ void emit_macho_file(IR_Context *context, Linker_Object *object) {
 
             if (object->target.is_x64()) {
                 type = X86_64_RELOC_UNSIGNED;
-                if      (reloc.is_for_rip_call) type = X86_64_RELOC_BRANCH;
-                else if (reloc.is_rip_relative) type = X86_64_RELOC_SIGNED;
+                if      (reloc.type == Relocation::RIP_CALL) type = X86_64_RELOC_BRANCH;
+                else if (reloc.type == Relocation::RIP_DATA) type = X86_64_RELOC_SIGNED;
             } else if (object->target.is_aarch64()) {
                 type = ARM64_RELOC_UNSIGNED;
-                if      (reloc.is_for_rip_call) type = ARM64_RELOC_BRANCH26;
-                else if (reloc.is_rip_relative)
+                if      (reloc.type == Relocation::RIP_CALL) type = ARM64_RELOC_BRANCH26;
+                else if (reloc.type == Relocation::RIP_DATA)
                     type = ARM64_RELOC_PAGE21;
-                else if (reloc.is_for_page_offset)
+                else if (reloc.type == Relocation::PAGEOFFSET)
                     type = ARM64_RELOC_PAGEOFF12;
             }
 

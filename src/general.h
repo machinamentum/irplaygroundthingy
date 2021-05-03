@@ -226,7 +226,7 @@ struct Bump_Allocator {
     }
 
     template<typename T>
-    void append(T v) {
+    void append(const T &v) {
         T *ptr = allocate<T>();
         *ptr = v;
     }

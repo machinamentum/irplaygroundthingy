@@ -144,13 +144,15 @@ void emit_coff_file(IR_Context *context, Linker_Object *object) {
             info->Type             = 0;
         }
 
-        for (auto &reloc : sect.relocations) {
+        for (size_t i = 0; i < sect.relocations.size(); ++i) {
+            auto &reloc = sect.relocations[i];
+
             PE_Coff_Relocation *info = (PE_Coff_Relocation *)buffer.allocate_bytes_unaligned(PE_COFF_RELOCATION_SIZE);
             info->VirtualAddress   = reloc.offset;
             info->SymbolTableIndex = reloc.symbol_index;
 
             u16 type = IMAGE_REL_AMD64_ADDR64;
-            if (reloc.is_for_rip_call || reloc.is_rip_relative) type = IMAGE_REL_AMD64_REL32;
+            if (reloc.type == Relocation::RIP_CALL || reloc.type == Relocation::RIP_DATA) type = IMAGE_REL_AMD64_REL32;
 
             if (type == IMAGE_REL_AMD64_ADDR64) assert(reloc.size == 8);
             if (type == IMAGE_REL_AMD64_REL32)  assert(reloc.size == 4);

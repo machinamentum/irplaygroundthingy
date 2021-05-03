@@ -59,13 +59,17 @@ Target get_host_target() {
 }
 
 struct Relocation {
-    bool is_for_rip_call = false;
-    bool is_rip_relative = false;
-    bool is_for_page_offset = false;
-    u32 size   = 0;
+    enum Type : u8 {
+        RIP_DATA = 0,
+        RIP_CALL,
+        ABSOLUTE,
+        PAGEOFFSET,
+    } type = RIP_DATA;
+
+    u8 size   = 0;
     u32 symbol_index = 0;
     u32 offset = 0;
-    u64 addend = 0;
+    u32 addend = 0;
 };
 
 struct Section {

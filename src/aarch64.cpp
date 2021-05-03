@@ -298,8 +298,7 @@ void load_symbol_address(AArch64_Emitter *emitter, Section *code_section, u32 sy
     adrp(&emitter->function_buffer, 0, machine_reg);
     {
         Relocation reloc;
-        reloc.is_for_rip_call = false;
-        reloc.is_rip_relative = true;
+        reloc.type = Relocation::RIP_DATA;
         reloc.offset = emitter->function_buffer.size() - 4;
         reloc.symbol_index = symbol_index;
         reloc.size = 4;
@@ -316,9 +315,7 @@ void load_symbol_address(AArch64_Emitter *emitter, Section *code_section, u32 sy
     add_imm12_to_reg64(&emitter->function_buffer, machine_reg, machine_reg, 0);
     {
         Relocation reloc;
-        reloc.is_for_rip_call = false;
-        reloc.is_rip_relative = false;
-        reloc.is_for_page_offset = true;
+        reloc.type = Relocation::PAGEOFFSET;
         reloc.offset = emitter->function_buffer.size() - 4;
         reloc.symbol_index = symbol_index;
         reloc.size = 4;
@@ -342,6 +339,7 @@ u8 emit_load_of_value(AArch64_Emitter *emitter, Linker_Object *object, Section *
             // copy the string characters into the data section
             assert(constant->string_value.length() <= U32_MAX);
 
+            // TODO can we avoid a string copy by copying the string table into the data section later on and then fixing up all the offsets ?
             if (auto str_id = emitter->string_table.intern(constant->string_value)) {
                 auto &entry = emitter->string_table.lookup(str_id);
                 if (entry.data_sec_offset == U32_MAX) { // New entry
@@ -663,7 +661,7 @@ u8 emit_instruction(AArch64_Emitter *emitter, Linker_Object *object, Function *f
                 } else {
                 */
                     Relocation reloc;
-                    reloc.is_for_rip_call = true;
+                    reloc.type = Relocation::RIP_CALL;
                     reloc.offset = emitter->function_buffer.size() - 4;
                     reloc.symbol_index = get_symbol_index(object, function_target);
                     reloc.size = 4;
